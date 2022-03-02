@@ -1,7 +1,7 @@
 use gtk::cairo::{Context};
 use gtk::gdk::keys::constants::C;
 use gtk::gdk::{EventMask, EventMotion, Rectangle as GdkRectangle, EventButton};
-use gtk::{prelude::*, DrawingArea, Menu, MenuItem};
+use gtk::{prelude::*, DrawingArea, Menu, MenuItem, RadioButton};
 use gtk::{cairo, gdk};
 use gtk::{ApplicationWindow, Button, Grid};
 use std::collections::HashMap;
@@ -81,14 +81,14 @@ enum MovableThing {
 
 #[derive(Debug, Clone, Copy)]
 enum Tool {
-    MoveTool,
+    Move,
     CreateNodes,
     CreateEdges,
-    ModifyEdges,
+    Modify,
 }
 
 impl Default for Tool {
-    fn default() -> Tool { Tool::MoveTool }
+    fn default() -> Tool { Tool::Move }
 }
 
 #[derive(Debug, Default)]
@@ -292,12 +292,19 @@ impl ApplicationState {
 
     fn on_drag(&mut self, area: &DrawingArea, motion: &EventMotion) {
         let position = motion.position().into();
-        if let Some(currently_moving_thing) = self.currently_moving_thing {
-            if let Err(e) = self.move_thing(currently_moving_thing, position) {
-                println!("Error: {}", e);
-            }
-            area.queue_draw();
-        }
+        match self.tool {
+            Tool::Move => {
+                if let Some(currently_moving_thing) = self.currently_moving_thing {
+                    if let Err(e) = self.move_thing(currently_moving_thing, position) {
+                        println!("Error: {}", e);
+                    }
+                    area.queue_draw();
+                }
+            },
+            _ => {
+                todo!()
+            },
+        };
     }
 
     /// Returns the thing and the squared distance from the thing to the position
@@ -366,65 +373,87 @@ impl ApplicationState {
         closest_thing.zip(closest_squared_distance)
     }
 
-    fn on_press(&mut self, area: &DrawingArea, press: &EventButton) {
-        match press.button() {
-            1 => {
-                // Find thing closest to current press position
-                if let Some((closest_thing, squared_distance)) = self.find_closest_thing(press.position().into()) {
-                    self.currently_moving_thing = Some(closest_thing);
-                }
-            },
-            3 => {
-                // Find thing closest to current press position
-                let closest_thing = match self.find_closest_thing(press.position().into()) {
-                    Some((closest_thing, squared_distance)) if squared_distance < 1024.0 => Some(closest_thing),
-                    _ => None,
-                };
-                let menu = Menu::new();
-                dbg!(closest_thing);
-                if let Some(closest_thing) = closest_thing {
-                    match closest_thing {
-                        MovableThing::Node { idx } => {
-                            let label_item = MenuItem::new();
-                            label_item.set_label(&format!("Node {} ({:?})", idx, self.nodes[&idx].label));
-                            label_item.show();
-                            label_item.set_sensitive(false);
-                            // dbg!()
-                            menu.attach(&label_item, 0, 1, 0, 1);
+    fn on_press(&mut self, _: &DrawingArea, press: &EventButton) {
+        match self.tool {
+            Tool::Move => {
+                match press.button() {
+                    1 => {
+                        // Find thing closest to current press position
+                        if let Some((closest_thing, squared_distance)) = self.find_closest_thing(press.position().into()) {
+                            if squared_distance < 1024.0 {
+                                self.currently_moving_thing = Some(closest_thing);
+                            }
+                        }
+                    },
+                    3 => {
+                        // Find thing closest to current press position
+                        let closest_thing = match self.find_closest_thing(press.position().into()) {
+                            Some((closest_thing, squared_distance)) if squared_distance < 1024.0 => Some(closest_thing),
+                            _ => None,
+                        };
+                        let menu = Menu::new();
+                        dbg!(closest_thing);
+                        if let Some(closest_thing) = closest_thing {
+                            match closest_thing {
+                                MovableThing::Node { idx } => {
+                                    let label_item = MenuItem::new();
+                                    label_item.set_label(&format!("Node {} ({:?})", idx, self.nodes[&idx].label));
+                                    label_item.show();
+                                    label_item.set_sensitive(false);
+                                    // dbg!()
+                                    menu.attach(&label_item, 0, 1, 0, 1);
 
-                            let remove_node_item = MenuItem::new();
-                            remove_node_item.set_label("Remove node");
-                            remove_node_item.connect_activate({
-                                let state = Weak::clone(&self.this);
-                                move |remove_node_item| {
-                                    dbg!("test1");
-                                    if let Some(state) = state.upgrade() {
-                                        dbg!("test2");
-                                        let mut state = state.borrow_mut();
-                                        dbg!("test3");
-                                        state.remove_node(idx);
-                                        dbg!("test4");
-                                        state.queue_draw().unwrap();
-                                    }
-                                }
-                            });
-                            menu.attach(&remove_node_item, 0, 1, 1, 2);
-                        },
-                        _ => {}
-                    };
-                    menu.show_all();
-                    menu.popup_easy(3, 3);
-                } else {
-                    // Handle right-clicking on empty canvas
-                }
+                                    let remove_node_item = MenuItem::new();
+                                    remove_node_item.set_label("Remove node");
+                                    remove_node_item.connect_activate({
+                                        let state = Weak::clone(&self.this);
+                                        move |remove_node_item| {
+                                            dbg!("test1");
+                                            if let Some(state) = state.upgrade() {
+                                                dbg!("test2");
+                                                let mut state = state.borrow_mut();
+                                                dbg!("test3");
+                                                state.remove_node(idx);
+                                                dbg!("test4");
+                                                state.queue_draw().unwrap();
+                                            }
+                                        }
+                                    });
+                                    menu.attach(&remove_node_item, 0, 1, 1, 2);
+                                },
+                                _ => {}
+                            };
+                            menu.show_all();
+                            menu.popup_easy(3, 3);
+                        } else {
+                            // TODO: Handle right-clicking on empty canvas
+                        }
+                    },
+                    _ => {},
+                };
             },
-            _ => {},
+            Tool::CreateNodes => {
+                todo!();
+            },
+            Tool::CreateEdges => {
+                todo!();
+            },
+            Tool::Modify => {
+                todo!();
+            },
         };
     }
 
     fn on_release(&mut self, _area: &DrawingArea, press: &EventButton) {
-        if press.button() == 1 {
-            self.currently_moving_thing = None;
+        match self.tool {
+            Tool::Move => {
+                if press.button() == 1 {
+                   self.currently_moving_thing = None;
+                }
+            },
+            _ => {
+                todo!()
+            },
         }
     }
 
@@ -461,9 +490,7 @@ fn build_ui(application: &gtk::Application) {
     }
 
     macro_rules! make_state_wrapper {
-        (
-            $func:ident($($args:ident),*) $(=> $retval:expr)?
-        ) => {
+        ( $func:ident($($args:ident),*) $(=> $retval:expr)? ) => {
             {
                 let state = Rc::clone(&state);
                 move |$($args),*| {
@@ -471,7 +498,13 @@ fn build_ui(application: &gtk::Application) {
                     $(; $retval)?
                 }
             }
-        }
+        };
+        (  ($state:ident $(, $args:ident)*) $body:tt $(=> $retval:expr)? ) => {
+            {
+                let $state = Rc::clone(&state);
+                move |$($args),*| $body
+            }
+        };
     }
 
     window.set_title("Graph Maker Test");
@@ -508,7 +541,54 @@ fn build_ui(application: &gtk::Application) {
     drawing_area.connect_button_release_event(make_state_wrapper!{
         on_release(area, release) => Inhibit(false)
     });
-    grid.add(&*drawing_area);
+    grid.attach(&*drawing_area, 0, 0, 4, 1);
+
+    let move_tool_button = RadioButton::new();
+    move_tool_button.set_label("Move Tool");
+    let create_nodes_tool_button = RadioButton::from_widget(&move_tool_button);
+    create_nodes_tool_button.set_label("Create Nodes Tool");
+    let create_edges_tool_button = RadioButton::from_widget(&move_tool_button);
+    create_edges_tool_button.set_label("Create Edges Tool");
+    let modify_tool_button = RadioButton::from_widget(&move_tool_button);
+    modify_tool_button.set_label("Modify Tool");
+
+    move_tool_button.connect_toggled(make_state_wrapper!{
+        (state, button) {
+            if button.is_active() {
+                let mut state = state.borrow_mut();
+                state.tool = Tool::Move;
+            }
+        }
+    });
+    create_nodes_tool_button.connect_toggled(make_state_wrapper!{
+        (state, button) {
+            if button.is_active() {
+                let mut state = state.borrow_mut();
+                state.tool = Tool::CreateNodes;
+            }
+        }
+    });
+    create_edges_tool_button.connect_toggled(make_state_wrapper!{
+        (state, button) {
+            if button.is_active() {
+                let mut state = state.borrow_mut();
+                state.tool = Tool::CreateEdges;
+            }
+        }
+    });
+    modify_tool_button.connect_toggled(make_state_wrapper!{
+        (state, button) {
+            if button.is_active() {
+                let mut state = state.borrow_mut();
+                state.tool = Tool::Modify;
+            }
+        }
+    });
+
+    grid.attach(&move_tool_button, 0, 1, 1, 1);
+    grid.attach(&create_nodes_tool_button, 1, 1, 1, 1);
+    grid.attach(&create_edges_tool_button, 2, 1, 1, 1);
+    grid.attach(&modify_tool_button, 3, 1, 1, 1);
 
     window.show_all();
 }
