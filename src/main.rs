@@ -1,5 +1,4 @@
 use gtk::cairo::{Context};
-use gtk::gdk::keys::constants::C;
 use gtk::gdk::{EventMask, EventMotion, Rectangle as GdkRectangle, EventButton};
 use gtk::{prelude::*, DrawingArea, Menu, MenuItem, RadioButton};
 use gtk::{cairo, gdk};
@@ -47,7 +46,7 @@ struct BezierEdge {
 }
 
 #[derive(Debug)]
-enum Edge {
+enum Edge { // TODO: make EdgeKind and pull label into struct Edge { label, kind }
     Bezier(BezierEdge),
     Linear,
 }
@@ -68,7 +67,7 @@ struct Node {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum MovableThing {
+enum MovableItem {
     /// Moving a node
     Node { idx: usize },
     /// Moving the position of a midpoint of a Bezier edge
@@ -98,7 +97,7 @@ struct ApplicationState {
     /// The Vec contains bezier curve points, excluding the first and last, which are the nodes
     edges: HashMap<(usize, usize), Edge>,
     allocated_size: Option<(u32, u32)>,
-    currently_moving_thing: Option<MovableThing>,
+    currently_moving_item: Option<MovableItem>,
     this: Weak<RefCell<Self>>,
     drawing_area: Option<Rc<DrawingArea>>,
     tool: Tool,
@@ -176,7 +175,7 @@ impl ApplicationState {
                 draw_bezier_with_handles(p1, p2, p3, p4);
             },
             Edge::Linear => {
-                // Draw edge curve in thick black
+                // Draw edge in thick black
                 ctx.new_path();
                 ctx.set_line_width(3.0);
                 ctx.set_source_rgb(0.0, 0.0, 0.0);
@@ -188,7 +187,7 @@ impl ApplicationState {
     }
 
     fn draw_edges(&self, area: &DrawingArea, ctx: &Context) {
-        // For each bezier curve:
+        // For each edge:
         // draw line from p1 to p2, with handle (circle) on p2,
         // draw line from p3 to p4, with handle (circle) on p3
         // Note that p4 coincides with p1 of the next curve
@@ -228,12 +227,12 @@ impl ApplicationState {
     }
 
     #[must_use]
-    fn move_thing(&mut self, thing: MovableThing, position: Position) -> Result<(), &'static str> {
-        match thing {
-            MovableThing::Node { idx } => {
+    fn move_item(&mut self, item: MovableItem, position: Position) -> Result<(), &'static str> {
+        match item {
+            MovableItem::Node { idx } => {
                 self.nodes.get_mut(&idx).ok_or("Invalid node")?.position = position;
             },
-            MovableThing::EdgeHandle { from_node, to_node, from_handle } => {
+            MovableItem::EdgeHandle { from_node, to_node, from_handle } => {
                 let edge = 
                     self.edges
                     .get_mut(&(from_node, to_node))
@@ -252,7 +251,7 @@ impl ApplicationState {
                     edge.to_offset = new_to_offset;
                 }
             },
-            MovableThing::EdgeMiddleHandle { from_node, to_node, idx, out_handle: is_out_handle } => {
+            MovableItem::EdgeMiddleHandle { from_node, to_node, idx, out_handle: is_out_handle } => {
                 let edge = self.edges.get_mut(&(from_node, to_node))
                     .ok_or("Invalid edge")?
                     .as_bezier_edge_mut()
@@ -272,7 +271,7 @@ impl ApplicationState {
                     },
                 };
             },
-            MovableThing::EdgeMiddlePosition { from_node, to_node, idx } => {
+            MovableItem::EdgeMiddlePosition { from_node, to_node, idx } => {
                 let edge = self.edges.get_mut(&(from_node, to_node))
                     .ok_or("Invalid edge")?
                     .as_bezier_edge_mut()
@@ -294,9 +293,9 @@ impl ApplicationState {
     fn on_drag(&mut self, area: &DrawingArea, motion: &EventMotion) {
         let position = motion.position().into();
         match self.tool {
-            Tool::Move | Tool::CreateNodes => {
-                if let Some(currently_moving_thing) = self.currently_moving_thing {
-                    if let Err(e) = self.move_thing(currently_moving_thing, position) {
+            Tool::Move | Tool::CreateNodes | Tool::CreateEdges => {
+                if let Some(currently_moving_item) = self.currently_moving_item {
+                    if let Err(e) = self.move_item(currently_moving_item, position) {
                         println!("Error: {}", e);
                     }
                     area.queue_draw();
@@ -308,18 +307,18 @@ impl ApplicationState {
         };
     }
 
-    /// Returns the thing and the squared distance from the thing to the position
-    fn find_closest_thing(&self, press_position: Position) -> Option<(MovableThing, f64)> {
+    /// Returns the item and the squared distance from the item to the position
+    fn find_closest_item(&self, press_position: Position) -> Option<(MovableItem, f64)> {
         // Find handle closest to position
-        let mut closest_thing: Option<MovableThing> = None;
+        let mut closest_item: Option<MovableItem> = None;
         let mut closest_squared_distance: Option<f64> = None;
 
-        let mut update_closest = |position: Position, thing| {
+        let mut update_closest = |position: Position, item| {
             let offset = position - press_position;
             let squared_distance = offset.norm();
 
             if closest_squared_distance == None || squared_distance < closest_squared_distance.unwrap() {
-                closest_thing = Some(thing);
+                closest_item = Some(item);
                 closest_squared_distance = Some(squared_distance);
             }
         };
@@ -330,14 +329,14 @@ impl ApplicationState {
                 let to_position = self.nodes[&to_node].position;
 
                 let from_handle_position = from_position + edge.from_offset;
-                update_closest(from_handle_position, MovableThing::EdgeHandle{
+                update_closest(from_handle_position, MovableItem::EdgeHandle{
                     from_node,
                     to_node,
                     from_handle: true,
                 });
 
                 let to_handle_position = to_position + edge.to_offset;
-                update_closest(to_handle_position, MovableThing::EdgeHandle{
+                update_closest(to_handle_position, MovableItem::EdgeHandle{
                     from_node,
                     to_node,
                     from_handle: false,
@@ -350,17 +349,17 @@ impl ApplicationState {
                     let p4 = handle.position();
                     let p3 = p4 + handle.in_offset();
 
-                    update_closest(p3, MovableThing::EdgeMiddleHandle{
+                    update_closest(p3, MovableItem::EdgeMiddleHandle{
                         from_node, to_node, idx, out_handle: false
                     });
-                    update_closest(p4, MovableThing::EdgeMiddlePosition{
+                    update_closest(p4, MovableItem::EdgeMiddlePosition{
                         from_node, to_node, idx
                     });
 
                     p1 = p4;
                     p2 = p1 + handle.out_offset();
 
-                    update_closest(p2, MovableThing::EdgeMiddleHandle{
+                    update_closest(p2, MovableItem::EdgeMiddleHandle{
                         from_node, to_node, idx, out_handle: true
                     });
                 }
@@ -368,10 +367,10 @@ impl ApplicationState {
         }
         for (&idx, node) in self.nodes.iter() {
             let position = node.position;
-            update_closest(position, MovableThing::Node{idx});
+            update_closest(position, MovableItem::Node{idx});
         }
 
-        closest_thing.zip(closest_squared_distance)
+        closest_item.zip(closest_squared_distance)
     }
 
     fn on_press(&mut self, _: &DrawingArea, press: &EventButton) {
@@ -380,24 +379,24 @@ impl ApplicationState {
             Tool::Move => {
                 match press.button() {
                     1 => {
-                        // Find thing closest to current press position
-                        if let Some((closest_thing, squared_distance)) = self.find_closest_thing(press_position) {
+                        // Find item closest to current press position
+                        if let Some((closest_item, squared_distance)) = self.find_closest_item(press_position) {
                             if squared_distance < 1024.0 {
-                                self.currently_moving_thing = Some(closest_thing);
+                                self.currently_moving_item = Some(closest_item);
                             }
                         }
                     },
                     3 => {
-                        // Find thing closest to current press position
-                        let closest_thing = match self.find_closest_thing(press_position) {
-                            Some((closest_thing, squared_distance)) if squared_distance < 1024.0 => Some(closest_thing),
+                        // Find item closest to current press position
+                        let closest_item = match self.find_closest_item(press_position) {
+                            Some((closest_item, squared_distance)) if squared_distance < 1024.0 => Some(closest_item),
                             _ => None,
                         };
                         let menu = Menu::new();
-                        dbg!(closest_thing);
-                        if let Some(closest_thing) = closest_thing {
-                            match closest_thing {
-                                MovableThing::Node { idx } => {
+                        dbg!(closest_item);
+                        if let Some(closest_item) = closest_item {
+                            match closest_item {
+                                MovableItem::Node { idx } => {
                                     let label_item = MenuItem::new();
                                     label_item.set_label(&format!("Node {} ({:?})", idx, self.nodes[&idx].label));
                                     label_item.show();
@@ -441,13 +440,20 @@ impl ApplicationState {
                             label: String::new(),
                             position: press_position,
                         });
-                        self.currently_moving_thing = Some(MovableThing::Node{idx});
+                        self.currently_moving_item = Some(MovableItem::Node{idx});
                         self.queue_draw();
                     },
                     _ => {}
                 }
             },
             Tool::CreateEdges => {
+                // Idea: Click on a node, create a "fake" node,
+                //  and create an edge between the clicked node and the fake node,
+                //  dragging moves the "fake" node, releasing near another node makes an edge.
+                //  releasing NOT near a node deletes the edge.
+                //  either way the fake node is deleted.
+                // If making an edge from a node to itself, make bezier.
+                //  otherwise, linear
                 todo!();
             },
             Tool::Modify => {
@@ -460,7 +466,7 @@ impl ApplicationState {
         match self.tool {
             Tool::Move | Tool::CreateNodes => {
                 if press.button() == 1 {
-                   self.currently_moving_thing = None;
+                   self.currently_moving_item = None;
                 }
             },
             _ => {
