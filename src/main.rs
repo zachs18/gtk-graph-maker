@@ -175,8 +175,8 @@ impl ApplicationState {
         }
     }
 
-    fn draw_nodes(&self, area: &DrawingArea, ctx: &Context) {
-        for (idx, node) in self.nodes.iter() {
+    fn draw_nodes(&self, _area: &DrawingArea, ctx: &Context) {
+        for (_idx, node) in self.nodes.iter() {
             let position = node.position;
             // Draw nodes ends as black circles
             ctx.new_path();
@@ -189,7 +189,7 @@ impl ApplicationState {
     }
 
     fn draw(&self, area: &DrawingArea, ctx: &Context) {
-        let size = self.allocated_size.unwrap();
+        // let size = self.allocated_size.unwrap();
 
         // Clear canvas with white
         ctx.set_source_rgb(1.0, 1.0, 1.0);
@@ -208,17 +208,17 @@ impl ApplicationState {
                 self.nodes.get_mut(&idx).unwrap().position = position;
             },
             MovableThing::EdgeHandle { from_node, to_node, from_handle } => {
-                let edge = self.edges.get_mut(&(from_node, to_node)).unwrap();
+                let edge = self.edges.get_mut(&(from_node, to_node)).unwrap().as_bezier_edge_mut().unwrap();
                 let from_node = &self.nodes[&from_node];
                 let to_node = &self.nodes[&to_node];
                 if from_handle {
                     // Move the from_handle
                     let new_from_offset = position - from_node.position;
-                    edge.as_bezier_edge_mut().unwrap().from_offset = new_from_offset;
+                    edge.from_offset = new_from_offset;
                 } else {
                     // Move the to_handle
                     let new_to_offset = position - to_node.position;
-                    edge.as_bezier_edge_mut().unwrap().to_offset = new_to_offset;
+                    edge.to_offset = new_to_offset;
                 }
             },
             MovableThing::EdgeMiddleHandle { from_node, to_node, idx, out_handle: is_out_handle } => {
@@ -233,7 +233,7 @@ impl ApplicationState {
                         if is_out_handle {
                             *out_offset = position - *handle_position;
                         } else {
-                            *out_offset = position - *handle_position;
+                            *in_offset = position - *handle_position;
                         }
                     },
                 };
@@ -255,13 +255,15 @@ impl ApplicationState {
 
     fn on_drag(&mut self, area: &DrawingArea, motion: &EventMotion) {
         let position = motion.position().into();
-        self.move_thing(self.currently_moving_thing.unwrap(), position);
-        area.queue_draw();
+        if let Some(currently_moving_thing) = self.currently_moving_thing {
+            self.move_thing(currently_moving_thing, position);
+            area.queue_draw();
+        }
     }
 
-    fn on_press(&mut self, _: &DrawingArea, press: &EventButton) {
-        // Find handle closest to current press position
-        let press_position = Position::from(press.position());
+    /// Returns the thing and the squared distance from the thing to the position
+    fn find_closest_thing(&self, press_position: Position) -> Option<(MovableThing, f64)> {
+        // Find handle closest to position
         let mut closest_thing: Option<MovableThing> = None;
         let mut closest_squared_distance: Option<f64> = None;
 
@@ -294,8 +296,8 @@ impl ApplicationState {
                     from_handle: false,
                 });
 
-                let mut p1 = from_position;
-                let mut p2 = from_handle_position;
+                let mut p1;
+                let mut p2;
 
                 for (idx, handle) in edge.mid_handles.iter().enumerate() {
                     let p4 = handle.position();
@@ -321,11 +323,23 @@ impl ApplicationState {
             let position = node.1.position;
             update_closest(position, MovableThing::Node{idx});
         }
-        self.currently_moving_thing = closest_thing;
+
+        closest_thing.zip(closest_squared_distance)
     }
 
-    fn on_release(&mut self, _: &DrawingArea, press: &EventButton) {
-        self.currently_moving_thing = None;
+    fn on_press(&mut self, _: &DrawingArea, press: &EventButton) {
+        if press.button() == 1 {
+            // Find handle closest to current press position
+            if let Some((closest_thing, squared_distance)) = self.find_closest_thing(press.position().into()) {
+                self.currently_moving_thing = Some(closest_thing);
+            }
+        }
+    }
+
+    fn on_release(&mut self, _area: &DrawingArea, press: &EventButton) {
+        if press.button() == 1 {
+            self.currently_moving_thing = None;
+        }
     }
 }
 
@@ -344,6 +358,7 @@ fn build_ui(application: &gtk::Application) {
             to_offset: (0.0, -300.0).into(),
             mid_handles: vec![
                 Handle::Symmetric((-50.0, -150.0).into(), (250.0, 250.0).into()),
+                Handle::Asymmetric((-50.0, -150.0).into(), (200.0, 200.0).into(), (40.0, 40.0).into()),
             ],
         }));
     }
