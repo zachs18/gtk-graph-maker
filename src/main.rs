@@ -93,6 +93,7 @@ impl Default for Tool {
 
 #[derive(Debug, Default)]
 struct ApplicationState {
+    next_node: usize,
     nodes: HashMap<usize, Node>,
     /// The Vec contains bezier curve points, excluding the first and last, which are the nodes
     edges: HashMap<(usize, usize), Edge>,
@@ -293,7 +294,7 @@ impl ApplicationState {
     fn on_drag(&mut self, area: &DrawingArea, motion: &EventMotion) {
         let position = motion.position().into();
         match self.tool {
-            Tool::Move => {
+            Tool::Move | Tool::CreateNodes => {
                 if let Some(currently_moving_thing) = self.currently_moving_thing {
                     if let Err(e) = self.move_thing(currently_moving_thing, position) {
                         println!("Error: {}", e);
@@ -374,12 +375,13 @@ impl ApplicationState {
     }
 
     fn on_press(&mut self, _: &DrawingArea, press: &EventButton) {
+        let press_position = press.position().into();
         match self.tool {
             Tool::Move => {
                 match press.button() {
                     1 => {
                         // Find thing closest to current press position
-                        if let Some((closest_thing, squared_distance)) = self.find_closest_thing(press.position().into()) {
+                        if let Some((closest_thing, squared_distance)) = self.find_closest_thing(press_position) {
                             if squared_distance < 1024.0 {
                                 self.currently_moving_thing = Some(closest_thing);
                             }
@@ -387,7 +389,7 @@ impl ApplicationState {
                     },
                     3 => {
                         // Find thing closest to current press position
-                        let closest_thing = match self.find_closest_thing(press.position().into()) {
+                        let closest_thing = match self.find_closest_thing(press_position) {
                             Some((closest_thing, squared_distance)) if squared_distance < 1024.0 => Some(closest_thing),
                             _ => None,
                         };
@@ -424,7 +426,7 @@ impl ApplicationState {
                                 _ => {}
                             };
                             menu.show_all();
-                            menu.popup_easy(3, 3);
+                            menu.popup_at_pointer(Some(press));
                         } else {
                             // TODO: Handle right-clicking on empty canvas
                         }
@@ -433,7 +435,17 @@ impl ApplicationState {
                 };
             },
             Tool::CreateNodes => {
-                todo!();
+                match press.button() {
+                    1 => {
+                        let idx = self.add_node(Node{
+                            label: String::new(),
+                            position: press_position,
+                        });
+                        self.currently_moving_thing = Some(MovableThing::Node{idx});
+                        self.queue_draw();
+                    },
+                    _ => {}
+                }
             },
             Tool::CreateEdges => {
                 todo!();
@@ -446,7 +458,7 @@ impl ApplicationState {
 
     fn on_release(&mut self, _area: &DrawingArea, press: &EventButton) {
         match self.tool {
-            Tool::Move => {
+            Tool::Move | Tool::CreateNodes => {
                 if press.button() == 1 {
                    self.currently_moving_thing = None;
                 }
@@ -457,10 +469,27 @@ impl ApplicationState {
         }
     }
 
-    fn remove_node(&mut self, node_idx: usize) {
+    fn remove_node(&mut self, node_idx: usize) -> Option<Node> { // TODO: return all edges also?
         // Remove all edges with this node at either end
         self.edges.retain(|&(from_idx, to_idx), _| from_idx != node_idx && to_idx != node_idx);
-        self.nodes.remove(&node_idx);
+        self.nodes.remove(&node_idx)
+    }
+
+    fn add_node(&mut self, node: Node) -> usize {
+        let idx = self.next_node;
+        self.next_node = self.next_node.checked_add(1).unwrap();
+        if let Some(_) = self.nodes.insert(idx, node) {
+            panic!("index should have been unused, but was not")
+        }
+        idx
+    }
+
+    fn remove_edge(&mut self, from_node: usize, to_node: usize) -> Option<Edge> {
+        self.edges.remove(&(from_node, to_node))
+    }
+
+    fn add_edge(&mut self, from_node: usize, to_node: usize, edge: Edge) -> Option<Edge> {
+        self.edges.insert((from_node, to_node), edge)
     }
 }
 
@@ -476,9 +505,9 @@ fn build_ui(application: &gtk::Application) {
     }
     {
         let mut state = state.borrow_mut();
-        state.nodes.insert(0, Node {label: "Start".into(), position: (100.0, 100.0).into()});
-        state.nodes.insert(1, Node {label: "End".into(), position: (400.0, 400.0).into()});
-        state.edges.insert((0, 1), Edge::Bezier(BezierEdge {
+        let n1 = state.add_node(Node {label: "Start".into(), position: (100.0, 100.0).into()});
+        let n2 = state.add_node(Node {label: "End".into(), position: (400.0, 400.0).into()});
+        state.add_edge(n1, n2, Edge::Bezier(BezierEdge {
             label: "Test".into(),
             from_offset: (0.0, 300.0).into(),
             to_offset: (0.0, -300.0).into(),
