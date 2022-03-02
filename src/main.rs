@@ -1,11 +1,11 @@
 use gtk::cairo::{Context};
 use gtk::gdk::keys::constants::C;
 use gtk::gdk::{EventMask, EventMotion, Rectangle as GdkRectangle, EventButton};
-use gtk::{prelude::*, DrawingArea};
+use gtk::{prelude::*, DrawingArea, Menu, MenuItem};
 use gtk::{cairo, gdk};
 use gtk::{ApplicationWindow, Button, Grid};
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::cell::RefCell;
 mod position;
 use position::*;
@@ -79,6 +79,18 @@ enum MovableThing {
     EdgeHandle { from_node: usize, to_node: usize, from_handle: bool },
 }
 
+#[derive(Debug, Clone, Copy)]
+enum Tool {
+    MoveTool,
+    CreateNodes,
+    CreateEdges,
+    ModifyEdges,
+}
+
+impl Default for Tool {
+    fn default() -> Tool { Tool::MoveTool }
+}
+
 #[derive(Debug, Default)]
 struct ApplicationState {
     nodes: HashMap<usize, Node>,
@@ -86,6 +98,9 @@ struct ApplicationState {
     edges: HashMap<(usize, usize), Edge>,
     allocated_size: Option<(u32, u32)>,
     currently_moving_thing: Option<MovableThing>,
+    this: Weak<RefCell<Self>>,
+    drawing_area: Option<Rc<DrawingArea>>,
+    tool: Tool,
 }
 
 impl ApplicationState {
@@ -94,6 +109,15 @@ impl ApplicationState {
             allocation.width.try_into().unwrap(),
             allocation.height.try_into().unwrap(),
         ));
+    }
+
+    fn queue_draw(&self) -> Option<()> {
+        if let Some(drawing_area) = &self.drawing_area {
+            drawing_area.queue_draw();
+            Some(())
+        } else {
+            None
+        }
     }
 
     fn draw_edge(&self, area: &DrawingArea, ctx: &Context, from_position: Position, to_position: Position, edge: &Edge) {
@@ -202,13 +226,19 @@ impl ApplicationState {
         self.draw_nodes(area, ctx);
     }
 
-    fn move_thing(&mut self, thing: MovableThing, position: Position) {
+    #[must_use]
+    fn move_thing(&mut self, thing: MovableThing, position: Position) -> Result<(), &'static str> {
         match thing {
             MovableThing::Node { idx } => {
-                self.nodes.get_mut(&idx).unwrap().position = position;
+                self.nodes.get_mut(&idx).ok_or("Invalid node")?.position = position;
             },
             MovableThing::EdgeHandle { from_node, to_node, from_handle } => {
-                let edge = self.edges.get_mut(&(from_node, to_node)).unwrap().as_bezier_edge_mut().unwrap();
+                let edge = 
+                    self.edges
+                    .get_mut(&(from_node, to_node))
+                    .ok_or("Invalid edge")?
+                    .as_bezier_edge_mut()
+                    .ok_or("Edge was not Bezier")?;
                 let from_node = &self.nodes[&from_node];
                 let to_node = &self.nodes[&to_node];
                 if from_handle {
@@ -222,7 +252,10 @@ impl ApplicationState {
                 }
             },
             MovableThing::EdgeMiddleHandle { from_node, to_node, idx, out_handle: is_out_handle } => {
-                let edge = self.edges.get_mut(&(from_node, to_node)).unwrap().as_bezier_edge_mut().unwrap();
+                let edge = self.edges.get_mut(&(from_node, to_node))
+                    .ok_or("Invalid edge")?
+                    .as_bezier_edge_mut()
+                    .ok_or("Edge was not Bezier")?;
                 let handle = &mut edge.mid_handles[idx];
                 match handle {
                     Handle::Symmetric(in_offset, handle_position) => {
@@ -239,7 +272,10 @@ impl ApplicationState {
                 };
             },
             MovableThing::EdgeMiddlePosition { from_node, to_node, idx } => {
-                let edge = self.edges.get_mut(&(from_node, to_node)).unwrap().as_bezier_edge_mut().unwrap();
+                let edge = self.edges.get_mut(&(from_node, to_node))
+                    .ok_or("Invalid edge")?
+                    .as_bezier_edge_mut()
+                    .ok_or("Edge was not Bezier")?;
                 let handle = &mut edge.mid_handles[idx];
                 match handle {
                     Handle::Symmetric(_, handle_position) => {
@@ -250,13 +286,16 @@ impl ApplicationState {
                     },
                 };
             }
-        }
+        };
+        Ok(())
     }
 
     fn on_drag(&mut self, area: &DrawingArea, motion: &EventMotion) {
         let position = motion.position().into();
         if let Some(currently_moving_thing) = self.currently_moving_thing {
-            self.move_thing(currently_moving_thing, position);
+            if let Err(e) = self.move_thing(currently_moving_thing, position) {
+                println!("Error: {}", e);
+            }
             area.queue_draw();
         }
     }
@@ -319,27 +358,80 @@ impl ApplicationState {
                 }
             }
         }
-        for (idx, node) in self.nodes.iter().enumerate() {
-            let position = node.1.position;
+        for (&idx, node) in self.nodes.iter() {
+            let position = node.position;
             update_closest(position, MovableThing::Node{idx});
         }
 
         closest_thing.zip(closest_squared_distance)
     }
 
-    fn on_press(&mut self, _: &DrawingArea, press: &EventButton) {
-        if press.button() == 1 {
-            // Find handle closest to current press position
-            if let Some((closest_thing, squared_distance)) = self.find_closest_thing(press.position().into()) {
-                self.currently_moving_thing = Some(closest_thing);
-            }
-        }
+    fn on_press(&mut self, area: &DrawingArea, press: &EventButton) {
+        match press.button() {
+            1 => {
+                // Find thing closest to current press position
+                if let Some((closest_thing, squared_distance)) = self.find_closest_thing(press.position().into()) {
+                    self.currently_moving_thing = Some(closest_thing);
+                }
+            },
+            3 => {
+                // Find thing closest to current press position
+                let closest_thing = match self.find_closest_thing(press.position().into()) {
+                    Some((closest_thing, squared_distance)) if squared_distance < 1024.0 => Some(closest_thing),
+                    _ => None,
+                };
+                let menu = Menu::new();
+                dbg!(closest_thing);
+                if let Some(closest_thing) = closest_thing {
+                    match closest_thing {
+                        MovableThing::Node { idx } => {
+                            let label_item = MenuItem::new();
+                            label_item.set_label(&format!("Node {} ({:?})", idx, self.nodes[&idx].label));
+                            label_item.show();
+                            label_item.set_sensitive(false);
+                            // dbg!()
+                            menu.attach(&label_item, 0, 1, 0, 1);
+
+                            let remove_node_item = MenuItem::new();
+                            remove_node_item.set_label("Remove node");
+                            remove_node_item.connect_activate({
+                                let state = Weak::clone(&self.this);
+                                move |remove_node_item| {
+                                    dbg!("test1");
+                                    if let Some(state) = state.upgrade() {
+                                        dbg!("test2");
+                                        let mut state = state.borrow_mut();
+                                        dbg!("test3");
+                                        state.remove_node(idx);
+                                        dbg!("test4");
+                                        state.queue_draw().unwrap();
+                                    }
+                                }
+                            });
+                            menu.attach(&remove_node_item, 0, 1, 1, 2);
+                        },
+                        _ => {}
+                    };
+                    menu.show_all();
+                    menu.popup_easy(3, 3);
+                } else {
+                    // Handle right-clicking on empty canvas
+                }
+            },
+            _ => {},
+        };
     }
 
     fn on_release(&mut self, _area: &DrawingArea, press: &EventButton) {
         if press.button() == 1 {
             self.currently_moving_thing = None;
         }
+    }
+
+    fn remove_node(&mut self, node_idx: usize) {
+        // Remove all edges with this node at either end
+        self.edges.retain(|&(from_idx, to_idx), _| from_idx != node_idx && to_idx != node_idx);
+        self.nodes.remove(&node_idx);
     }
 }
 
@@ -348,6 +440,11 @@ fn build_ui(application: &gtk::Application) {
     let window = ApplicationWindow::new(application);
     // set_visual(&window, None);
     let state: Rc<RefCell<ApplicationState>> = Default::default();
+    {
+        let state_weak = Rc::downgrade(&state);
+        let mut state = state.borrow_mut();
+        state.this = state_weak;
+    }
     {
         let mut state = state.borrow_mut();
         state.nodes.insert(0, Node {label: "Start".into(), position: (100.0, 100.0).into()});
@@ -386,7 +483,11 @@ fn build_ui(application: &gtk::Application) {
     grid.set_vexpand(true);
     window.add(&grid);
 
-    let drawing_area = gtk::DrawingArea::new();
+    let drawing_area = Rc::new(gtk::DrawingArea::new());
+    {
+        let mut state = state.borrow_mut();
+        state.drawing_area = Some(Rc::clone(&drawing_area));
+    }
     drawing_area.set_hexpand(true);
     drawing_area.set_vexpand(true);
     
@@ -407,7 +508,7 @@ fn build_ui(application: &gtk::Application) {
     drawing_area.connect_button_release_event(make_state_wrapper!{
         on_release(area, release) => Inhibit(false)
     });
-    grid.add(&drawing_area);
+    grid.add(&*drawing_area);
 
     window.show_all();
 }
