@@ -87,7 +87,7 @@ macro_rules! impl_op {
     };
 }
 
-use std::ops::{Add, Sub, Neg};
+use std::ops::{Add, Sub, Neg, Mul, Div};
 
 impl_op!(Add, add, Position + Offset => Position);
 impl_op!(Add, add, Offset + Position => Position);
@@ -108,6 +108,46 @@ impl Neg for &Offset {
     type Output = Offset;
     fn neg(self) -> Offset {
         Offset { x: -self.x, y: -self.y, }
+    }
+}
+
+impl Mul<f64> for Offset {
+    type Output = Offset;
+    fn mul(self, rhs: f64) -> Self::Output {
+        Offset { x: self.x * rhs, y: self.y * rhs}
+    }
+}
+impl Mul<f64> for &Offset {
+    type Output = Offset;
+    fn mul(self, rhs: f64) -> Self::Output {
+        Offset { x: self.x * rhs, y: self.y * rhs}
+    }
+}
+
+
+impl Mul<Offset> for f64 {
+    type Output = Offset;
+    fn mul(self, rhs: Offset) -> Self::Output {
+        Offset { x: self * rhs.x, y: self * rhs.y }
+    }
+}
+impl Mul<&Offset> for f64 {
+    type Output = Offset;
+    fn mul(self, rhs: &Offset) -> Self::Output {
+        Offset { x: self * rhs.x, y: self * rhs.y }
+    }
+}
+
+impl Div<f64> for Offset {
+    type Output = Offset;
+    fn div(self, rhs: f64) -> Self::Output {
+        Offset { x: self.x / rhs, y: self.y / rhs}
+    }
+}
+impl Div<f64> for &Offset {
+    type Output = Offset;
+    fn div(self, rhs: f64) -> Self::Output {
+        Offset { x: self.x / rhs, y: self.y / rhs}
     }
 }
 
