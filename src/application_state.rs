@@ -82,17 +82,8 @@ enum MovableItem {
     EdgeHandle { from_node: usize, to_node: usize, from_handle: bool },
 }
 
-#[derive(Debug, Clone, Copy)]
-enum Tool {
-    Move,
-    CreateNodes,
-    CreateEdges,
-    Modify,
-}
-
-impl Default for Tool {
-    fn default() -> Tool { Tool::Move }
-}
+mod tools;
+use tools::*;
 
 #[derive(Debug)]
 pub struct ApplicationState {
@@ -104,11 +95,7 @@ pub struct ApplicationState {
     currently_moving_item: Option<MovableItem>,
     this: Weak<RefCell<Self>>,
     drawing_area: Rc<DrawingArea>,
-    tool: Tool,
-    /// This is used when making edges
-    new_edge_start_node: Option<usize>,
-    /// This is used when making edges
-    fake_node: Option<usize>,
+    tool: Rc<dyn Tool>,
 }
 
 impl ApplicationState {
@@ -127,9 +114,7 @@ impl ApplicationState {
             currently_moving_item: None,
             this: Weak::new(),
             drawing_area: Rc::clone(drawing_area),
-            tool: Tool::Move,
-            new_edge_start_node: None,
-            fake_node: None,
+            tool: Rc::new(MoveTool::default()),
         };
         let state = Rc::new(RefCell::new(state));
         {
@@ -179,7 +164,9 @@ impl ApplicationState {
             (state, button) {
                 if button.is_active() {
                     let mut state = state.borrow_mut();
-                    state.tool = Tool::Move;
+                    let tool = Rc::clone(&state.tool);
+                    tool.cleanup(&mut state);
+                    state.tool = MoveTool::setup(&mut state);
                 }
             }
         });
@@ -187,7 +174,9 @@ impl ApplicationState {
             (state, button) {
                 if button.is_active() {
                     let mut state = state.borrow_mut();
-                    state.tool = Tool::CreateNodes;
+                    let tool = Rc::clone(&state.tool);
+                    tool.cleanup(&mut state);
+                    state.tool = CreateNodeTool::setup(&mut state);
                 }
             }
         });
@@ -195,7 +184,9 @@ impl ApplicationState {
             (state, button) {
                 if button.is_active() {
                     let mut state = state.borrow_mut();
-                    state.tool = Tool::CreateEdges;
+                    let tool = Rc::clone(&state.tool);
+                    tool.cleanup(&mut state);
+                    state.tool = CreateEdgeTool::setup(&mut state);
                 }
             }
         });
@@ -203,7 +194,8 @@ impl ApplicationState {
             (state, button) {
                 if button.is_active() {
                     let mut state = state.borrow_mut();
-                    state.tool = Tool::Modify;
+                    // state.tool = Tool::Modify;
+                    todo!()
                 }
             }
         });
@@ -394,23 +386,6 @@ impl ApplicationState {
         Ok(())
     }
 
-    fn on_drag(&mut self, area: &DrawingArea, motion: &EventMotion) {
-        let position = motion.position().into();
-        match self.tool {
-            Tool::Move | Tool::CreateNodes | Tool::CreateEdges => {
-                if let Some(currently_moving_item) = self.currently_moving_item {
-                    if let Err(e) = self.move_item(currently_moving_item, position) {
-                        println!("Error: {}", e);
-                    }
-                    area.queue_draw();
-                }
-            },
-            _ => {
-                todo!()
-            },
-        };
-    }
-
     /// Returns the item and the squared distance from the item to the position
     fn find_closest_item(&self, press_position: Position) -> Option<(MovableItem, f64)> {
         self.find_closest_item_matching(press_position, |_| true)
@@ -486,137 +461,18 @@ impl ApplicationState {
     }
 
     fn on_press(&mut self, _: &DrawingArea, press: &EventButton) {
-        let press_position = press.position().into();
-        match self.tool {
-            Tool::Move => {
-                match press.button() {
-                    1 => {
-                        // Find item closest to current press position
-                        if let Some((closest_item, squared_distance)) = self.find_closest_item(press_position) {
-                            if squared_distance < 1024.0 {
-                                self.currently_moving_item = Some(closest_item);
-                            }
-                        }
-                    },
-                    3 => {
-                        // Find item closest to current press position
-                        let closest_item = match self.find_closest_item(press_position) {
-                            Some((closest_item, squared_distance)) if squared_distance < 1024.0 => Some(closest_item),
-                            _ => None,
-                        };
-                        let menu = Menu::new();
-                        dbg!(closest_item);
-                        if let Some(closest_item) = closest_item {
-                            match closest_item {
-                                MovableItem::Node { idx } => {
-                                    let label_item = MenuItem::new();
-                                    label_item.set_label(&format!("Node {} ({:?})", idx, self.nodes[&idx].label));
-                                    label_item.show();
-                                    label_item.set_sensitive(false);
-                                    // dbg!()
-                                    menu.attach(&label_item, 0, 1, 0, 1);
+        let tool = Rc::clone(&self.tool);
+        tool.on_press(self, press);
+    }
 
-                                    let remove_node_item = MenuItem::new();
-                                    remove_node_item.set_label("Remove node");
-                                    remove_node_item.connect_activate({
-                                        let state = Weak::clone(&self.this);
-                                        move |remove_node_item| {
-                                            dbg!("test1");
-                                            if let Some(state) = state.upgrade() {
-                                                dbg!("test2");
-                                                let mut state = state.borrow_mut();
-                                                dbg!("test3");
-                                                state.remove_node(idx);
-                                                dbg!("test4");
-                                                state.queue_draw();
-                                            }
-                                        }
-                                    });
-                                    menu.attach(&remove_node_item, 0, 1, 1, 2);
-                                },
-                                _ => {}
-                            };
-                            menu.show_all();
-                            menu.popup_at_pointer(Some(press));
-                        } else {
-                            // TODO: Handle right-clicking on empty canvas
-                        }
-                    },
-                    _ => {},
-                };
-            },
-            Tool::CreateNodes => {
-                match press.button() {
-                    1 => {
-                        let idx = self.add_node(Node{
-                            label: String::new(),
-                            position: press_position,
-                        });
-                        self.currently_moving_item = Some(MovableItem::Node{idx});
-                        self.queue_draw();
-                    },
-                    _ => {}
-                }
-            },
-            Tool::CreateEdges => {
-                // Idea: Click on a node, create a "fake" node,
-                //  and create an edge between the clicked node and the fake node,
-                //  dragging moves the "fake" node, releasing near another node makes an edge.
-                //  releasing NOT near a node deletes the edge.
-                //  either way the fake node is deleted.
-                // If making an edge from a node to itself, make bezier.
-                //  otherwise, linear
-                if let Some((MovableItem::Node{idx}, closest_squared_distance)) = self.find_closest_item(press_position) {
-                    let start_node = idx;
-                    let fake_node = self.add_node(Node{label: "<fake node>".into(), position: press_position});
-                    self.fake_node = Some(fake_node);
-                    self.new_edge_start_node = Some(start_node);
-                    self.currently_moving_item = Some(MovableItem::Node{idx: fake_node});
-
-                    self.add_edge(start_node, fake_node, Edge::Linear);
-                    self.queue_draw();
-                }
-            },
-            Tool::Modify => {
-                todo!();
-            },
-        };
+    fn on_drag(&mut self, _: &DrawingArea, motion: &EventMotion) {
+        let tool = Rc::clone(&self.tool);
+        tool.on_drag(self, motion);
     }
 
     fn on_release(&mut self, _area: &DrawingArea, press: &EventButton) {
-        let release_position = press.position().into();
-        match self.tool {
-            Tool::Move | Tool::CreateNodes => {
-                if press.button() == 1 {
-                   self.currently_moving_item = None;
-                }
-            },
-            Tool::CreateEdges => {
-                let fake_node = match self.fake_node.take() {
-                    Some(fake_node) => fake_node,
-                    None => return,
-                };
-                let new_edge_start_node = match self.new_edge_start_node.take() {
-                    Some(new_edge_start_node) => new_edge_start_node,
-                    None => return,
-                };
-                // Delete fake node before finding, so we don't find_closest the fake node
-                self.remove_node(fake_node);
-                let closest_node = self.find_closest_item_matching(
-                    release_position,
-                    |item| matches!(item, MovableItem::Node{..})
-                );
-                if let Some((MovableItem::Node{idx: end_node}, squared_distance)) = closest_node {
-                    // Add new edge
-                    dbg!(end_node);
-                    self.add_edge(new_edge_start_node, end_node, Edge::Linear);
-                }
-                self.queue_draw();
-            },
-            _ => {
-                todo!()
-            },
-        }
+        let tool = Rc::clone(&self.tool);
+        tool.on_release(self, press);
     }
 
     pub fn remove_node(&mut self, node_idx: usize) -> Option<Node> { // TODO: return all edges also?
@@ -638,7 +494,13 @@ impl ApplicationState {
         self.edges.remove(&(from_node, to_node))
     }
 
+    // If the edge already existed, does *not* insert, and gives you the edge back
     pub fn add_edge(&mut self, from_node: usize, to_node: usize, edge: Edge) -> Option<Edge> {
-        self.edges.insert((from_node, to_node), edge)
+        if !self.edges.contains_key(&(from_node, to_node)) {
+            self.edges.insert((from_node, to_node), edge);
+            None
+        } else {
+            Some(edge)
+        }
     }
 }
