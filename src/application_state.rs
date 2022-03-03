@@ -5,13 +5,11 @@ use std::collections::HashMap;
 use gtk::RadioButton;
 use gtk::prelude::ToggleButtonExt;
 use gtk::{
-    prelude::{GtkMenuExt, GtkMenuItemExt, WidgetExt, WidgetExtManual},
+    prelude::{WidgetExt, WidgetExtManual},
     gdk::{EventMotion, EventButton, EventMask, Rectangle as GdkRectangle},
     cairo::Context,
     DrawingArea,
     Inhibit,
-    Menu,
-    MenuItem,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]

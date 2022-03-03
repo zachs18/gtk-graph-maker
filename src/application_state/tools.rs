@@ -34,48 +34,9 @@ impl Tool for MoveTool {
                 }
             },
             3 => {
-                // Find item closest to current press position
-                let closest_item = match state.find_closest_item(press_position) {
-                    Some((closest_item, squared_distance)) if squared_distance < 1024.0 => Some(closest_item),
-                    _ => None,
-                };
-                let menu = Menu::new();
-                dbg!(closest_item);
-                if let Some(closest_item) = closest_item {
-                    match closest_item {
-                        ManipulableItem::Node { idx } => {
-                            let label_item = MenuItem::new();
-                            label_item.set_label(&format!("Node {} ({:?})", idx, state.nodes[&idx].label));
-                            label_item.show();
-                            label_item.set_sensitive(false);
-                            // dbg!()
-                            menu.attach(&label_item, 0, 1, 0, 1);
-
-                            let remove_node_item = MenuItem::new();
-                            remove_node_item.set_label("Remove node");
-                            remove_node_item.connect_activate({
-                                let state = Weak::clone(&state.this);
-                                move |remove_node_item| {
-                                    dbg!("test1");
-                                    if let Some(state) = state.upgrade() {
-                                        dbg!("test2");
-                                        let mut state = state.borrow_mut();
-                                        dbg!("test3");
-                                        state.remove_node(idx);
-                                        dbg!("test4");
-                                        state.queue_draw();
-                                    }
-                                }
-                            });
-                            menu.attach(&remove_node_item, 0, 1, 1, 2);
-                        },
-                        _ => {}
-                    };
-                    menu.show_all();
-                    menu.popup_at_pointer(Some(press));
-                } else {
-                    // TODO: Handle right-clicking on empty canvas
-                }
+                // Behave as ModifyTool when right-clicking
+                let tool = Rc::new(ModifyTool {});
+                tool.on_press(state, press);
             },
             _ => {},
         };

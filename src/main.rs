@@ -1,5 +1,3 @@
-
-
 use gtk::{prelude::*, RadioButton};
 use gtk::{ApplicationWindow, Grid};
 use std::rc::Rc;
@@ -8,8 +6,6 @@ mod position;
 
 mod application_state;
 use application_state::*;
-
-
 
 fn build_ui(application: &gtk::Application) {
     let window = ApplicationWindow::new(application);
