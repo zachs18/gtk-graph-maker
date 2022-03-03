@@ -54,15 +54,17 @@ fn build_ui(application: &gtk::Application) {
         let mut state = state.borrow_mut();
         let n1 = state.add_node(Node {label: "Start".into(), position: (100.0, 100.0).into()});
         let n2 = state.add_node(Node {label: "End".into(), position: (400.0, 400.0).into()});
-        state.add_edge(n1, n2, Edge::Bezier(BezierEdge {
+        state.add_edge(n1, n2, Edge {
             label: "Test".into(),
-            from_offset: (0.0, 300.0).into(),
-            to_offset: (0.0, -300.0).into(),
-            mid_handles: vec![
-                Handle::Symmetric((-50.0, -150.0).into(), (250.0, 250.0).into()),
-                Handle::Asymmetric((-50.0, -150.0).into(), (200.0, 200.0).into(), (40.0, 40.0).into()),
-            ],
-        }));
+            kind: EdgeKind::Bezier(BezierEdge {
+                from_offset: (0.0, 300.0).into(),
+                to_offset: (0.0, -300.0).into(),
+                mid_handles: vec![
+                    Handle::Symmetric((-50.0, -150.0).into(), (250.0, 250.0).into()),
+                    Handle::Asymmetric((-50.0, -150.0).into(), (200.0, 200.0).into(), (40.0, 40.0).into()),
+                ],
+            }),
+        });
     }
 
     window.show_all();

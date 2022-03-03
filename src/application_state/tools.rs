@@ -2,7 +2,7 @@ use std::{rc::{Rc, Weak}, cell::RefCell};
 
 use gtk::{gdk::{EventButton, EventMotion}, Menu, MenuItem, prelude::{GtkMenuItemExt, GtkMenuExt, WidgetExt}};
 
-use super::{ApplicationState, MovableItem, Node, Edge};
+use super::{ApplicationState, ManipulableItem, Node, Edge, EdgeKind};
 
 pub trait Tool : std::fmt::Debug {
     fn setup(state: &mut ApplicationState) -> Rc<Self> where Self: Sized;
@@ -14,7 +14,7 @@ pub trait Tool : std::fmt::Debug {
 
 #[derive(Default, Debug)]
 pub struct MoveTool {
-    currently_moving_item: RefCell<Option<MovableItem>>,
+    currently_moving_item: RefCell<Option<ManipulableItem>>,
 }
 
 impl Tool for MoveTool {
@@ -43,7 +43,7 @@ impl Tool for MoveTool {
                 dbg!(closest_item);
                 if let Some(closest_item) = closest_item {
                     match closest_item {
-                        MovableItem::Node { idx } => {
+                        ManipulableItem::Node { idx } => {
                             let label_item = MenuItem::new();
                             label_item.set_label(&format!("Node {} ({:?})", idx, state.nodes[&idx].label));
                             label_item.show();
@@ -84,8 +84,8 @@ impl Tool for MoveTool {
         let position = motion.position().into();
         let currently_moving_item = self.currently_moving_item.borrow_mut();
         if let Some(currently_moving_item) = *currently_moving_item {
-            if let Err(e) = state.move_item(currently_moving_item, position) {
-                println!("Error: {}", e);
+            if let Err(e) = currently_moving_item.move_item(state, position) {
+                println!("Error: {:?}", e);
             }
             state.queue_draw();
         }
@@ -105,7 +105,7 @@ impl Tool for MoveTool {
 
 #[derive(Default, Debug)]
 pub struct CreateNodeTool {
-    currrent_node: RefCell<Option<MovableItem>>,
+    currrent_node: RefCell<Option<ManipulableItem>>,
 }
 
 impl Tool for CreateNodeTool {
@@ -121,7 +121,7 @@ impl Tool for CreateNodeTool {
                     label: String::new(),
                     position: press_position,
                 });
-                *currrent_node = Some(MovableItem::Node{idx});
+                *currrent_node = Some(ManipulableItem::Node{idx});
                 state.queue_draw();
             },
             _ => {}
@@ -131,8 +131,8 @@ impl Tool for CreateNodeTool {
         let position = motion.position().into();
         let currrent_node = self.currrent_node.borrow_mut();
         if let Some(currrent_node) = *currrent_node {
-            if let Err(e) = state.move_item(currrent_node, position) {
-                println!("Error: {}", e);
+            if let Err(e) = currrent_node.move_item(state, position) {
+                println!("Error: {:?}", e);
             }
             state.queue_draw();
         }
@@ -176,12 +176,12 @@ impl Tool for CreateEdgeTool {
         //  either way the fake node is deleted.
         // If making an edge from a node to itself, make bezier.
         //  otherwise, linear
-        if let Some((MovableItem::Node{idx}, _)) = state.find_closest_item(press_position) {
+        if let Some((ManipulableItem::Node{idx}, _)) = state.find_closest_item(press_position) {
             let from_node = idx;
             let fake_to_node = state.add_node(Node{label: "<fake node>".into(), position: press_position});
             *inner = Some(CreateEdgeToolInner {from_node, fake_to_node});
 
-            state.add_edge(from_node, fake_to_node, Edge::Linear);
+            state.add_edge(from_node, fake_to_node, Edge{label: "".into(), kind: EdgeKind::Linear});
             state.queue_draw();
         }
     }
@@ -190,8 +190,9 @@ impl Tool for CreateEdgeTool {
         let position = motion.position().into();
         let inner = self.inner.borrow_mut();
         if let Some(inner) = &*inner {
-            if let Err(e) = state.move_item(MovableItem::Node{idx: inner.fake_to_node}, position) {
-                println!("Error: {}", e);
+            let item = ManipulableItem::Node{idx: inner.fake_to_node};
+            if let Err(e) = item.move_item(state, position) {
+                println!("Error: {:?}", e);
             }
             state.queue_draw();
         }
@@ -208,12 +209,12 @@ impl Tool for CreateEdgeTool {
         state.remove_node(fake_to_node);
         let closest_node = state.find_closest_item_matching(
             release_position,
-            |item| matches!(item, MovableItem::Node{..})
+            |item| matches!(item, ManipulableItem::Node{..})
         );
-        if let Some((MovableItem::Node{idx: to_node}, _)) = closest_node {
+        if let Some((ManipulableItem::Node{idx: to_node}, _)) = closest_node {
             // Add new edge
             dbg!(to_node);
-            state.add_edge(from_node, to_node, Edge::Linear);
+            state.add_edge(from_node, to_node, Edge{label: "".into(), kind: EdgeKind::Linear});
         }
         state.queue_draw();
     }
@@ -225,5 +226,120 @@ impl Tool for CreateEdgeTool {
             None => return,
         };
         state.remove_node(fake_to_node);
+    }
+}
+
+
+#[derive(Default, Debug)]
+pub struct ModifyTool {
+
+}
+
+impl Tool for ModifyTool {
+    fn setup(state: &mut ApplicationState) -> Rc<Self> where Self: Sized {
+        Rc::new(Self::default())
+    }
+
+    fn on_press(self: Rc<Self>, state: &mut ApplicationState, press: &EventButton) {
+        let press_position = press.position().into();
+        // Find item closest to current press position
+        let closest_item = match state.find_closest_item(press_position) {
+            Some((closest_item, squared_distance)) if squared_distance < 1024.0 => Some(closest_item),
+            _ => None,
+        };
+        let menu = Menu::new();
+        let mut attach = {
+            let menu = &menu;
+            let mut row = 0;
+            move |child: &MenuItem| {
+                menu.attach(child, 0, 1, row, row+1);
+                row += 1;
+            }
+        };
+        dbg!(closest_item);
+        if let Some(closest_item) = closest_item {
+            let label_item = MenuItem::new();
+            label_item.set_label(&format!("{:?}", closest_item)); // TODO: description, e.g. including label?
+            label_item.show();
+            label_item.set_sensitive(false);
+            attach(&label_item);
+
+            let remove_item = MenuItem::new();
+            remove_item.set_label("Remove");
+            remove_item.connect_activate({
+                let state = Weak::clone(&state.this);
+                move |remove_item| {
+                    if let Some(state) = state.upgrade() {
+                        let mut state = state.borrow_mut();
+                        closest_item.remove_item(&mut state);
+                        state.queue_draw();
+                    }
+                }
+            });
+            attach(&remove_item);
+
+            if closest_item.is_label() {
+                let change_label_item = MenuItem::new();
+                change_label_item.set_label("Change label");
+                change_label_item.connect_activate({
+                    let state = Weak::clone(&state.this);
+                    move |change_label_item| {
+                        if let Some(state) = state.upgrade() {
+                            let mut state = state.borrow_mut();
+                            // closest_item.replace_label(&mut state, new_label);
+                            state.queue_draw();
+                        }
+                    }
+                });
+            }
+
+            if matches!(closest_item, ManipulableItem::EdgeMiddlePosition {..} ) {
+                let make_asymmetric_item = MenuItem::new();
+                make_asymmetric_item.set_label("Make asymmetric");
+                make_asymmetric_item.connect_activate({
+                    let state = Weak::clone(&state.this);
+                    move |make_asymmetric_item| {
+                        if let Some(state) = state.upgrade() {
+                            let mut state = state.borrow_mut();
+                            closest_item.make_asymmetric(&mut state);
+                            state.queue_draw();
+                        }
+                    }
+                });
+                attach(&make_asymmetric_item);
+
+                let make_symmetric_item = MenuItem::new();
+                make_symmetric_item.set_label("Make symmetric");
+                make_symmetric_item.connect_activate({
+                    let state = Weak::clone(&state.this);
+                    move |make_symmetric_item| {
+                        if let Some(state) = state.upgrade() {
+                            let mut state = state.borrow_mut();
+                            closest_item.make_symmetric(&mut state);
+                            state.queue_draw();
+                        }
+                    }
+                });
+                attach(&make_symmetric_item);
+            }
+
+            menu.show_all();
+            menu.popup_at_pointer(Some(press));
+            dbg!("AAA");
+        } else {
+            // TODO: Handle right-clicking on empty canvas
+        }
+    }
+
+    fn on_drag(self: Rc<Self>, _: &mut ApplicationState, _: &EventMotion) {
+        // do nothing
+    }
+
+    fn on_release(self: Rc<Self>, _: &mut ApplicationState, _: &EventButton) {
+        // do nothing
+    }
+
+    fn cleanup(self: Rc<Self>, _: &mut ApplicationState) {
+        // do nothing
     }
 }

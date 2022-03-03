@@ -43,24 +43,29 @@ impl Handle {
 
 #[derive(Debug)]
 pub struct BezierEdge {
-    pub label: String,
     pub from_offset: Offset,
     pub mid_handles: Vec<Handle>,
     pub to_offset: Offset,
 }
 
 #[derive(Debug)]
-pub enum Edge { // TODO: make EdgeKind and pull label into struct Edge { label, kind }
+pub enum EdgeKind {
     Bezier(BezierEdge),
     Linear,
 }
 
+#[derive(Debug)]
+pub struct Edge { // TODO: make EdgeKind and pull label into struct Edge { label, kind }
+    pub label: String,
+    pub kind: EdgeKind,
+}
+
 impl Edge {
     fn as_bezier_edge(&self) -> Option<&BezierEdge> {
-        match self { Edge::Bezier(e) => Some(e), _ => None }
+        match self { Edge{ kind: EdgeKind::Bezier(e), ..} => Some(e), _ => None }
     }
     fn as_bezier_edge_mut(&mut self) -> Option<&mut BezierEdge> {
-        match self { Edge::Bezier(e) => Some(e), _ => None }
+        match self { Edge{ kind: EdgeKind::Bezier(e), .. } => Some(e), _ => None }
     }
 }
 
@@ -71,7 +76,7 @@ pub struct Node {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum MovableItem {
+enum ManipulableItem {
     /// Moving a node
     Node { idx: usize },
     /// Moving the position of a midpoint of a Bezier edge
@@ -80,6 +85,277 @@ enum MovableItem {
     EdgeMiddleHandle { from_node: usize, to_node: usize, idx: usize, out_handle: bool },
     /// Moving the handle of an endpoint of a Bezier edge
     EdgeHandle { from_node: usize, to_node: usize, from_handle: bool },
+    /// Moving or relabeling a node label
+    NodeLabel { idx: usize },
+    /// Moving or relabeling an edge label
+    EdgeLabel { from_node: usize, to_node: usize },
+}
+
+// TODO: Maybe make ManipulableItem have a method .actions() that lists the actions that can be performed?
+pub struct Action {
+    description: String,
+    action: Box<dyn Fn(&mut ApplicationState)>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ManipulateError {
+    InvalidNode { idx: usize },
+    InvalidEdge { from_node: usize, to_node: usize },
+    InvalidEdgeHandle { from_node: usize, to_node: usize, idx: usize },
+    EdgeNotBezier { from_node: usize, to_node: usize },
+    ItemIsNotLabel,
+    ItemIsNotEdgeHandle,
+}
+
+impl ManipulableItem {
+    pub fn is_movable(&self) -> bool {
+        use ManipulableItem::*;
+        match self {
+            Node { .. } => true,
+            EdgeMiddlePosition { .. } => true,
+            EdgeMiddleHandle { .. } => true,
+            EdgeHandle { .. } => true,
+            NodeLabel { .. } => true,
+            EdgeLabel { .. } => true,
+        }
+    }
+
+    pub fn move_item(&self, state: &mut ApplicationState, position: Position) -> Result<(), ManipulateError> {
+        use ManipulateError::*;
+        match *self {
+            ManipulableItem::Node { idx } => {
+                state.nodes.get_mut(&idx).ok_or(InvalidNode{idx})?.position = position;
+            },
+            ManipulableItem::EdgeHandle { from_node, to_node, from_handle } => {
+                let edge = 
+                state.edges
+                    .get_mut(&(from_node, to_node))
+                    .ok_or(InvalidEdge{from_node, to_node})?
+                    .as_bezier_edge_mut()
+                    .ok_or(EdgeNotBezier{from_node, to_node})?;
+                let from_node = &state.nodes[&from_node];
+                let to_node = &state.nodes[&to_node];
+                if from_handle {
+                    // Move the from_handle
+                    let new_from_offset = position - from_node.position;
+                    edge.from_offset = new_from_offset;
+                } else {
+                    // Move the to_handle
+                    let new_to_offset = position - to_node.position;
+                    edge.to_offset = new_to_offset;
+                }
+            },
+            ManipulableItem::EdgeMiddleHandle { from_node, to_node, idx, out_handle: is_out_handle } => {
+                let edge = state.edges.get_mut(&(from_node, to_node))
+                    .ok_or(InvalidEdge{from_node, to_node})?
+                    .as_bezier_edge_mut()
+                    .ok_or(EdgeNotBezier{from_node, to_node})?;
+                let handle = &mut edge.mid_handles[idx];
+                match handle {
+                    Handle::Symmetric(in_offset, handle_position) => {
+                        let new_offset = if !is_out_handle {position - *handle_position} else {*handle_position - position};
+                        *in_offset = new_offset;
+                    },
+                    Handle::Asymmetric(in_offset, handle_position, out_offset) => {
+                        if is_out_handle {
+                            *out_offset = position - *handle_position;
+                        } else {
+                            *in_offset = position - *handle_position;
+                        }
+                    },
+                };
+            },
+            ManipulableItem::EdgeMiddlePosition { from_node, to_node, idx } => {
+                let edge = state.edges.get_mut(&(from_node, to_node))
+                    .ok_or(InvalidEdge{from_node, to_node})?
+                    .as_bezier_edge_mut()
+                    .ok_or(EdgeNotBezier{from_node, to_node})?;
+                let handle = &mut edge.mid_handles[idx];
+                match handle {
+                    Handle::Symmetric(_, handle_position) => {
+                        *handle_position = position;
+                    },
+                    Handle::Asymmetric(_, handle_position, _) => {
+                        *handle_position = position;
+                    },
+                };
+            },
+            ManipulableItem::NodeLabel{ idx } => {
+                todo!("implement node label positioning with offsets")
+            },
+            ManipulableItem::EdgeLabel{ from_node, to_node } => {
+                todo!("implement edge label positioning with offsets")
+            },
+        };
+        Ok(())
+    }
+
+    pub fn is_label(&self) -> bool {
+        use ManipulableItem::*;
+        match self {
+            NodeLabel { .. } => true,
+            EdgeLabel { .. } => true,
+            _ => false,
+        }
+    }
+
+    pub fn replace_label(&self, state: &mut ApplicationState, new_label: String) -> Result<String, ManipulateError> {
+        use ManipulableItem::*;
+        use ManipulateError::*;
+        match *self {
+            // TODO: decide if Node should be able to be interpreted as NodeLabel when unambiguous
+            Node { idx } | NodeLabel { idx } => {
+                let node = state.nodes.get_mut(&idx)
+                    .ok_or(InvalidNode{idx})?;
+                Ok(std::mem::replace(&mut node.label, new_label))
+            },
+            EdgeLabel { from_node, to_node } => {
+                let edge = state.edges.get_mut(&(from_node, to_node))
+                    .ok_or(InvalidEdge{from_node, to_node})?;
+                Ok(std::mem::replace(&mut edge.label, new_label))
+            },
+            _ => Err(ItemIsNotLabel)
+        }
+    }
+
+    pub fn get_label<'a>(&self, state: &'a ApplicationState, new_label: String) -> Result<&'a str, ManipulateError> {
+        use ManipulableItem::*;
+        use ManipulateError::*;
+        match *self {
+            NodeLabel { idx } => {
+                let node = state.nodes.get(&idx)
+                    .ok_or(InvalidNode{idx})?;
+                Ok(&node.label)
+            },
+            EdgeLabel { from_node, to_node } => {
+                let edge = state.edges.get(&(from_node, to_node))
+                    .ok_or(InvalidEdge{from_node, to_node})?;
+                Ok(&edge.label)
+            },
+            _ => Err(ItemIsNotLabel)
+        }
+    }
+
+    pub fn make_symmetric(&self, state: &mut ApplicationState) -> Result<(), ManipulateError> {
+        use ManipulableItem::*;
+        use ManipulateError::*;
+        if let EdgeMiddleHandle { from_node, to_node, idx, .. }
+             | EdgeMiddlePosition { from_node, to_node, idx } = *self
+        {
+            let edge = state.edges.get_mut(&(from_node, to_node))
+                .ok_or(InvalidEdge {from_node, to_node})?;
+            let edge = edge.as_bezier_edge_mut()
+                .ok_or(EdgeNotBezier{from_node, to_node})?;
+            let handle = edge.mid_handles.get_mut(idx)
+                .ok_or(InvalidEdgeHandle { from_node, to_node, idx })?;
+            match *handle {
+                Handle::Symmetric(_, _) => {}, // Already symmetric
+                Handle::Asymmetric(in_offset, position, out_offset) => {
+                    let new_in_offset = (in_offset - out_offset) / 2.0;
+                    *handle = Handle::Symmetric(new_in_offset, position);
+                },
+            };
+            Ok(())
+        } else {
+            Err(ItemIsNotEdgeHandle)
+        }
+    }
+    pub fn make_asymmetric(&self, state: &mut ApplicationState) -> Result<(), ManipulateError> {
+        use ManipulableItem::*;
+        use ManipulateError::*;
+        if let EdgeMiddleHandle { from_node, to_node, idx, .. }
+             | EdgeMiddlePosition { from_node, to_node, idx } = *self
+        {
+            let edge = state.edges.get_mut(&(from_node, to_node))
+                .ok_or(InvalidEdge {from_node, to_node})?;
+            let edge = edge.as_bezier_edge_mut()
+                .ok_or(EdgeNotBezier{from_node, to_node})?;
+            let handle = edge.mid_handles.get_mut(idx)
+                .ok_or(InvalidEdgeHandle { from_node, to_node, idx })?;
+            match *handle {
+                Handle::Asymmetric(_, _, _) => {}, // Already asymmetric
+                Handle::Symmetric(in_offset, position) => {
+                    *handle = Handle::Asymmetric(in_offset, position, -in_offset);
+                },
+            };
+            Ok(())
+        } else {
+            Err(ItemIsNotEdgeHandle)
+        }
+    }
+
+    pub fn remove_item(&self, state: &mut ApplicationState) -> Result<(), ManipulateError> {
+        use ManipulateError::*;
+        match *self {
+            ManipulableItem::Node { idx } => {
+                state.remove_node(idx);
+            },
+            ManipulableItem::EdgeHandle { from_node, to_node, from_handle } => {
+                // let edge = 
+                // state.edges
+                //     .get_mut(&(from_node, to_node))
+                //     .ok_or(InvalidEdge{from_node, to_node})?
+                //     .as_bezier_edge_mut()
+                //     .ok_or(EdgeNotBezier{from_node, to_node})?;
+                // let from_node = &state.nodes[&from_node];
+                // let to_node = &state.nodes[&to_node];
+                // if from_handle {
+                //     // Move the from_handle
+                //     let new_from_offset = position - from_node.position;
+                //     edge.from_offset = new_from_offset;
+                // } else {
+                //     // Move the to_handle
+                //     let new_to_offset = position - to_node.position;
+                //     edge.to_offset = new_to_offset;
+                // }
+                todo!()
+            },
+            ManipulableItem::EdgeMiddleHandle { from_node, to_node, idx, out_handle: is_out_handle } => {
+                // let edge = state.edges.get_mut(&(from_node, to_node))
+                //     .ok_or(InvalidEdge{from_node, to_node})?
+                //     .as_bezier_edge_mut()
+                //     .ok_or(EdgeNotBezier{from_node, to_node})?;
+                // let handle = &mut edge.mid_handles[idx];
+                // match handle {
+                //     Handle::Symmetric(in_offset, handle_position) => {
+                //         let new_offset = if !is_out_handle {position - *handle_position} else {*handle_position - position};
+                //         *in_offset = new_offset;
+                //     },
+                //     Handle::Asymmetric(in_offset, handle_position, out_offset) => {
+                //         if is_out_handle {
+                //             *out_offset = position - *handle_position;
+                //         } else {
+                //             *in_offset = position - *handle_position;
+                //         }
+                //     },
+                // };
+                todo!()
+            },
+            ManipulableItem::EdgeMiddlePosition { from_node, to_node, idx } => {
+                state.remove_edge(from_node, to_node);
+                // let edge = state.edges.get_mut(&(from_node, to_node))
+                //     .ok_or(InvalidEdge{from_node, to_node})?
+                //     .as_bezier_edge_mut()
+                //     .ok_or(EdgeNotBezier{from_node, to_node})?;
+                // let handle = &mut edge.mid_handles[idx];
+                // match handle {
+                //     Handle::Symmetric(_, handle_position) => {
+                //         *handle_position = position;
+                //     },
+                //     Handle::Asymmetric(_, handle_position, _) => {
+                //         *handle_position = position;
+                //     },
+                // };
+            },
+            ManipulableItem::NodeLabel{ idx } => {
+                todo!("implement node label positioning with offsets")
+            },
+            ManipulableItem::EdgeLabel{ from_node, to_node } => {
+                todo!("implement edge label positioning with offsets")
+            },
+        };
+        Ok(())
+    }
 }
 
 mod tools;
@@ -92,7 +368,6 @@ pub struct ApplicationState {
     /// The Vec contains bezier curve points, excluding the first and last, which are the nodes
     edges: HashMap<(usize, usize), Edge>,
     allocated_size: Option<(u32, u32)>,
-    currently_moving_item: Option<MovableItem>,
     this: Weak<RefCell<Self>>,
     drawing_area: Rc<DrawingArea>,
     tool: Rc<dyn Tool>,
@@ -111,7 +386,6 @@ impl ApplicationState {
             nodes: HashMap::new(),
             edges: HashMap::new(),
             allocated_size: None,
-            currently_moving_item: None,
             this: Weak::new(),
             drawing_area: Rc::clone(drawing_area),
             tool: Rc::new(MoveTool::default()),
@@ -194,8 +468,9 @@ impl ApplicationState {
             (state, button) {
                 if button.is_active() {
                     let mut state = state.borrow_mut();
-                    // state.tool = Tool::Modify;
-                    todo!()
+                    let tool = Rc::clone(&state.tool);
+                    tool.cleanup(&mut state);
+                    state.tool = ModifyTool::setup(&mut state);
                 }
             }
         });
@@ -214,8 +489,8 @@ impl ApplicationState {
     }
 
     fn draw_edge(&self, _: &DrawingArea, ctx: &Context, from_position: Position, to_position: Position, edge: &Edge) {
-        match edge {
-            Edge::Bezier(BezierEdge {from_offset, mid_handles, to_offset, ..}) => {
+        match &edge.kind {
+            EdgeKind::Bezier(BezierEdge {from_offset, mid_handles, to_offset, ..}) => {
                 let draw_bezier_with_handles = |p1, p2, p3, p4| {
                     // println!("{:?} {:?} {:?} {:?}", p1, p2, p3, p4);
                     // Draw handles first, so they're under curve
@@ -267,7 +542,7 @@ impl ApplicationState {
                 let p3 = p4 + to_offset;
                 draw_bezier_with_handles(p1, p2, p3, p4);
             },
-            Edge::Linear => {
+            EdgeKind::Linear => {
                 // Draw edge in thick black
                 ctx.new_path();
                 ctx.set_line_width(3.0);
@@ -322,80 +597,16 @@ impl ApplicationState {
         self.draw_nodes(area, ctx);
     }
 
-    #[must_use]
-    fn move_item(&mut self, item: MovableItem, position: Position) -> Result<(), &'static str> {
-        match item {
-            MovableItem::Node { idx } => {
-                self.nodes.get_mut(&idx).ok_or("Invalid node")?.position = position;
-            },
-            MovableItem::EdgeHandle { from_node, to_node, from_handle } => {
-                let edge = 
-                    self.edges
-                    .get_mut(&(from_node, to_node))
-                    .ok_or("Invalid edge")?
-                    .as_bezier_edge_mut()
-                    .ok_or("Edge was not Bezier")?;
-                let from_node = &self.nodes[&from_node];
-                let to_node = &self.nodes[&to_node];
-                if from_handle {
-                    // Move the from_handle
-                    let new_from_offset = position - from_node.position;
-                    edge.from_offset = new_from_offset;
-                } else {
-                    // Move the to_handle
-                    let new_to_offset = position - to_node.position;
-                    edge.to_offset = new_to_offset;
-                }
-            },
-            MovableItem::EdgeMiddleHandle { from_node, to_node, idx, out_handle: is_out_handle } => {
-                let edge = self.edges.get_mut(&(from_node, to_node))
-                    .ok_or("Invalid edge")?
-                    .as_bezier_edge_mut()
-                    .ok_or("Edge was not Bezier")?;
-                let handle = &mut edge.mid_handles[idx];
-                match handle {
-                    Handle::Symmetric(in_offset, handle_position) => {
-                        let new_offset = if !is_out_handle {position - *handle_position} else {*handle_position - position};
-                        *in_offset = new_offset;
-                    },
-                    Handle::Asymmetric(in_offset, handle_position, out_offset) => {
-                        if is_out_handle {
-                            *out_offset = position - *handle_position;
-                        } else {
-                            *in_offset = position - *handle_position;
-                        }
-                    },
-                };
-            },
-            MovableItem::EdgeMiddlePosition { from_node, to_node, idx } => {
-                let edge = self.edges.get_mut(&(from_node, to_node))
-                    .ok_or("Invalid edge")?
-                    .as_bezier_edge_mut()
-                    .ok_or("Edge was not Bezier")?;
-                let handle = &mut edge.mid_handles[idx];
-                match handle {
-                    Handle::Symmetric(_, handle_position) => {
-                        *handle_position = position;
-                    },
-                    Handle::Asymmetric(_, handle_position, _) => {
-                        *handle_position = position;
-                    },
-                };
-            }
-        };
-        Ok(())
-    }
-
     /// Returns the item and the squared distance from the item to the position
-    fn find_closest_item(&self, press_position: Position) -> Option<(MovableItem, f64)> {
+    fn find_closest_item(&self, press_position: Position) -> Option<(ManipulableItem, f64)> {
         self.find_closest_item_matching(press_position, |_| true)
     }
 
     /// Returns the item and the squared distance from the item to the position
     /// Only considers items for which predicate(&item) == true
-    fn find_closest_item_matching<P: FnMut(&MovableItem) -> bool>(&self, press_position: Position, mut predicate: P) -> Option<(MovableItem, f64)> {
+    fn find_closest_item_matching<P: FnMut(&ManipulableItem) -> bool>(&self, press_position: Position, mut predicate: P) -> Option<(ManipulableItem, f64)> {
         // Find handle closest to position
-        let mut closest_item: Option<MovableItem> = None;
+        let mut closest_item: Option<ManipulableItem> = None;
         let mut closest_squared_distance: Option<f64> = None;
 
         let mut update_closest = |position: Position, item| {
@@ -411,19 +622,20 @@ impl ApplicationState {
         };
 
         for (&(from_node, to_node), edge) in self.edges.iter() {
-            if let Edge::Bezier(edge) = edge {
+            // TODO: edge label positioning
+            if let EdgeKind::Bezier(edge) = &edge.kind {
                 let from_position = self.nodes[&from_node].position;
                 let to_position = self.nodes[&to_node].position;
 
                 let from_handle_position = from_position + edge.from_offset;
-                update_closest(from_handle_position, MovableItem::EdgeHandle{
+                update_closest(from_handle_position, ManipulableItem::EdgeHandle{
                     from_node,
                     to_node,
                     from_handle: true,
                 });
 
                 let to_handle_position = to_position + edge.to_offset;
-                update_closest(to_handle_position, MovableItem::EdgeHandle{
+                update_closest(to_handle_position, ManipulableItem::EdgeHandle{
                     from_node,
                     to_node,
                     from_handle: false,
@@ -436,25 +648,26 @@ impl ApplicationState {
                     let p4 = handle.position();
                     let p3 = p4 + handle.in_offset();
 
-                    update_closest(p3, MovableItem::EdgeMiddleHandle{
+                    update_closest(p3, ManipulableItem::EdgeMiddleHandle{
                         from_node, to_node, idx, out_handle: false
                     });
-                    update_closest(p4, MovableItem::EdgeMiddlePosition{
+                    update_closest(p4, ManipulableItem::EdgeMiddlePosition{
                         from_node, to_node, idx
                     });
 
                     p1 = p4;
                     p2 = p1 + handle.out_offset();
 
-                    update_closest(p2, MovableItem::EdgeMiddleHandle{
+                    update_closest(p2, ManipulableItem::EdgeMiddleHandle{
                         from_node, to_node, idx, out_handle: true
                     });
                 }
             }
         }
         for (&idx, node) in self.nodes.iter() {
+            // TODO: node label positioning
             let position = node.position;
-            update_closest(position, MovableItem::Node{idx});
+            update_closest(position, ManipulableItem::Node{idx});
         }
 
         closest_item.zip(closest_squared_distance)
