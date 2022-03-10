@@ -608,11 +608,11 @@ impl ApplicationState {
         let mut closest_squared_distance: Option<f64> = None;
 
         let mut update_closest = |position: Position, item| {
-            let offset = position - press_position;
-            let squared_distance = offset.norm();
+            if predicate(&item) {
+                let offset = position - press_position;
+                let squared_distance = offset.norm();
 
-            if closest_squared_distance == None || squared_distance < closest_squared_distance.unwrap() {
-                if predicate(&item) {
+                if closest_squared_distance == None || squared_distance < closest_squared_distance.unwrap() {
                     closest_item = Some(item);
                     closest_squared_distance = Some(squared_distance);
                 }
