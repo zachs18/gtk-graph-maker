@@ -45,8 +45,10 @@ enum ManipulableItem {
     //     from_handle: bool,
     // },
     /// Moving or relabeling a node label
+    #[allow(unused)]
     NodeLabel { idx: usize },
     /// Moving or relabeling an edge label
+    #[allow(unused)]
     EdgeLabel { from_node: usize, to_node: usize },
 }
 
@@ -70,6 +72,7 @@ pub enum ManipulateError {
         to_node: usize,
         error: ManipulateEdgeError,
     },
+    #[allow(unused)]
     ItemIsNotLabel,
     ItemIsNotEdgeHandle,
 }
@@ -94,7 +97,6 @@ impl ManipulableItem {
             Node { .. } => true,
             EdgeMiddleControlPoint { .. } => true,
             EdgeHandle { .. } => true,
-            // EdgeHandle { .. } => true,
             NodeLabel { .. } => true,
             EdgeLabel { .. } => true,
         }
@@ -114,31 +116,10 @@ impl ManipulableItem {
                     .ok_or(InvalidNode { idx })?
                     .position = position;
             }
-            // ManipulableItem::EdgeHandle {
-            //     from_node,
-            //     to_node,
-            //     from_handle,
-            // } => {
-            //     let edge = state
-            //         .edges
-            //         .get_mut(&(from_node, to_node))
-            //         .ok_or(InvalidEdge { from_node, to_node })?;
-            //     let from_node = &state.nodes[&from_node];
-            //     let to_node = &state.nodes[&to_node];
-            //     if from_handle {
-            //         // Move the from_handle
-            //         let new_from_offset = position - from_node.position;
-            //         edge.start_offset = new_from_offset;
-            //     } else {
-            //         // Move the to_handle
-            //         let new_to_offset = position - to_node.position;
-            //         edge.end_offset = new_to_offset;
-            //     }
-            // }
             ManipulableItem::EdgeHandle {
                 from_node,
                 to_node,
-                segment_idx: idx,
+                segment_idx,
                 out_handle: is_out_handle,
             } => {
                 let edge = state
@@ -148,27 +129,31 @@ impl ManipulableItem {
                 let initial_position = &state.nodes[&from_node].position;
                 let terminal_position = &state.nodes[&to_node].position;
                 let mut handle = edge
-                    .handle(initial_position, terminal_position, idx)
+                    .handle(
+                        initial_position,
+                        terminal_position,
+                        segment_idx + !is_out_handle as usize,
+                    )
                     .ok_or(ManipulateEdgeError {
                         from_node,
                         to_node,
                         error: edge::ManipulateEdgeError::InvalidControlPoint {
-                            control_point_idx: idx,
+                            control_point_idx: segment_idx,
                         },
                     })?;
                 if is_out_handle {
                     *handle.out_offset().map_err(move |error| {
                         ManipulateError::ManipulateEdgeError {
-                            from_node: from_node,
-                            to_node: to_node,
+                            from_node,
+                            to_node,
                             error,
                         }
                     })? = position - *handle.position();
                 } else {
                     *handle.in_offset().map_err(move |error| {
                         ManipulateError::ManipulateEdgeError {
-                            from_node: from_node,
-                            to_node: to_node,
+                            from_node,
+                            to_node,
                             error,
                         }
                     })? = position - *handle.position();
@@ -251,15 +236,10 @@ impl ManipulableItem {
         use ManipulableItem::*;
         use ManipulateError::*;
         if let EdgeHandle {
-            from_node,
-            to_node,
-            segment_idx: idx,
-            ..
+            from_node, to_node, ..
         }
         | EdgeMiddleControlPoint {
-            from_node,
-            to_node,
-            control_point_idx: idx,
+            from_node, to_node, ..
         } = *self
         {
             let edge = state
@@ -268,7 +248,18 @@ impl ManipulableItem {
                 .ok_or(InvalidEdge { from_node, to_node })?;
             let initial_position = &state.nodes[&from_node].position;
             let terminal_position = &state.nodes[&to_node].position;
-            edge.make_symmetric(initial_position, terminal_position, idx)
+            let control_point_idx = match *self {
+                EdgeMiddleControlPoint {
+                    control_point_idx, ..
+                } => control_point_idx,
+                EdgeHandle {
+                    segment_idx,
+                    out_handle,
+                    ..
+                } => segment_idx + !out_handle as usize,
+                _ => unreachable!(),
+            };
+            edge.make_symmetric(initial_position, terminal_position, control_point_idx)
                 .map_err(ManipulateError::add_nodes_to_edge_error(from_node, to_node))?;
             Ok(())
         } else {
@@ -299,7 +290,7 @@ impl ManipulableItem {
                     segment_idx,
                     out_handle,
                     ..
-                } => segment_idx + out_handle as usize,
+                } => segment_idx + !out_handle as usize,
                 _ => unreachable!(),
             };
             edge.make_asymmetric(from_position, to_position, control_point_idx)
@@ -307,8 +298,7 @@ impl ManipulableItem {
                     from_node,
                     to_node,
                     error,
-                })?;
-            Ok(())
+                })
         } else {
             Err(ItemIsNotEdgeHandle)
         }
@@ -319,85 +309,43 @@ impl ManipulableItem {
         match *self {
             ManipulableItem::Node { idx } => {
                 state.remove_node(idx);
+                Ok(())
             }
-            // ManipulableItem::EdgeHandle {
-            //     from_node,
-            //     to_node,
-            //     from_handle,
-            // } => {
-            //     // let edge =
-            //     // state.edges
-            //     //     .get_mut(&(from_node, to_node))
-            //     //     .ok_or(InvalidEdge{from_node, to_node})?
-            //     //     .as_bezier_edge_mut()
-            //     //     .ok_or(EdgeNotBezier{from_node, to_node})?;
-            //     // let from_node = &state.nodes[&from_node];
-            //     // let to_node = &state.nodes[&to_node];
-            //     // if from_handle {
-            //     //     // Move the from_handle
-            //     //     let new_from_offset = position - from_node.position;
-            //     //     edge.from_offset = new_from_offset;
-            //     // } else {
-            //     //     // Move the to_handle
-            //     //     let new_to_offset = position - to_node.position;
-            //     //     edge.to_offset = new_to_offset;
-            //     // }
-            //     todo!()
-            // }
             ManipulableItem::EdgeHandle {
                 from_node,
                 to_node,
-                segment_idx: idx,
-                out_handle: is_out_handle,
+                segment_idx,
+                ..
             } => {
-                // let edge = state.edges.get_mut(&(from_node, to_node))
-                //     .ok_or(InvalidEdge{from_node, to_node})?
-                //     .as_bezier_edge_mut()
-                //     .ok_or(EdgeNotBezier{from_node, to_node})?;
-                // let handle = &mut edge.mid_handles[idx];
-                // match handle {
-                //     Handle::Symmetric(in_offset, handle_position) => {
-                //         let new_offset = if !is_out_handle {position - *handle_position} else {*handle_position - position};
-                //         *in_offset = new_offset;
-                //     },
-                //     Handle::Asymmetric(in_offset, handle_position, out_offset) => {
-                //         if is_out_handle {
-                //             *out_offset = position - *handle_position;
-                //         } else {
-                //             *in_offset = position - *handle_position;
-                //         }
-                //     },
-                // };
-                todo!()
+                dbg!(self);
+                let edge = state
+                    .edges
+                    .get_mut(&(from_node, to_node))
+                    .ok_or(InvalidEdge { from_node, to_node })?;
+                edge.make_linear(segment_idx).map_err(move |error| {
+                    ManipulateError::ManipulateEdgeError {
+                        from_node: from_node,
+                        to_node: to_node,
+                        error,
+                    }
+                })
             }
             ManipulableItem::EdgeMiddleControlPoint {
                 from_node,
                 to_node,
-                control_point_idx: idx,
+                control_point_idx: _,
             } => {
+                eprintln!("TODO: just remove the control point (combine two segments), don't remove the whole edge");
                 state.remove_edge(from_node, to_node);
-                // let edge = state.edges.get_mut(&(from_node, to_node))
-                //     .ok_or(InvalidEdge{from_node, to_node})?
-                //     .as_bezier_edge_mut()
-                //     .ok_or(EdgeNotBezier{from_node, to_node})?;
-                // let handle = &mut edge.mid_handles[idx];
-                // match handle {
-                //     Handle::Symmetric(_, handle_position) => {
-                //         *handle_position = position;
-                //     },
-                //     Handle::Asymmetric(_, handle_position, _) => {
-                //         *handle_position = position;
-                //     },
-                // };
+                Ok(())
             }
-            ManipulableItem::NodeLabel { idx } => {
+            ManipulableItem::NodeLabel { .. } => {
                 todo!("implement node label positioning with offsets")
             }
-            ManipulableItem::EdgeLabel { from_node, to_node } => {
+            ManipulableItem::EdgeLabel { .. } => {
                 todo!("implement edge label positioning with offsets")
             }
-        };
-        Ok(())
+        }
     }
 }
 
@@ -525,8 +473,8 @@ impl ApplicationState {
     }
     fn set_allocated_size(&mut self, _: &DrawingArea, allocation: &GdkRectangle) {
         self.allocated_size = Some((
-            allocation.width.try_into().unwrap(),
-            allocation.height.try_into().unwrap(),
+            allocation.width().try_into().unwrap(),
+            allocation.height().try_into().unwrap(),
         ));
     }
 
@@ -690,6 +638,16 @@ impl ApplicationState {
                 )
                 .enumerate()
             {
+                if idx < edge.control_points.len() {
+                    update_closest(
+                        p4,
+                        ManipulableItem::EdgeMiddleControlPoint {
+                            from_node,
+                            to_node,
+                            control_point_idx: idx + 1,
+                        },
+                    );
+                }
                 match segment {
                     EdgeSegment::Linear => {
                         // Linear segments have no internal points.
@@ -711,20 +669,10 @@ impl ApplicationState {
                             ManipulableItem::EdgeHandle {
                                 from_node,
                                 to_node,
-                                segment_idx: idx + 1,
+                                segment_idx: idx,
                                 out_handle: false,
                             },
                         );
-                        if idx < edge.control_points.len() {
-                            update_closest(
-                                p4,
-                                ManipulableItem::EdgeMiddleControlPoint {
-                                    from_node,
-                                    to_node,
-                                    control_point_idx: idx + 1,
-                                },
-                            );
-                        }
                     }
                 }
                 p1 = p4;

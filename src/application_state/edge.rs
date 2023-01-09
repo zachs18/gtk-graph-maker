@@ -2,8 +2,6 @@ use std::borrow::{BorrowMut, Cow};
 
 use crate::position::{Offset, Position};
 
-use super::ManipulateError;
-
 #[derive(Debug)]
 enum WhichHandle {
     In,
@@ -44,7 +42,7 @@ pub struct Handle<'a> {
 
 impl<'a> Drop for Handle<'a> {
     fn drop(&mut self) {
-        let (in_offset, out_offset) = match *dbg!(&self.kind) {
+        let (in_offset, out_offset) = match self.kind {
             HandleKind::Symmetric {
                 in_offset,
                 out_offset,
@@ -80,7 +78,7 @@ impl<'a> Drop for Handle<'a> {
             }
         } else if self.control_point_idx == self.edge.control_points.len() + 1 {
             debug_assert!(out_offset.is_none(), "terminal edge has no out_offset");
-            match dbg!(in_offset, self.edge.segments.last_mut().unwrap()) {
+            match (in_offset, self.edge.segments.last_mut().unwrap()) {
                 (None, EdgeSegment::Linear) => {},
                 (None, EdgeSegment::Bezier(_))|(Some(_), EdgeSegment::Linear) => unreachable!("terminal edge has in_offset if and only if the last segment is a bezier segment"),
                 (Some(new_in_offset), EdgeSegment::Bezier(segment)) => {
@@ -362,8 +360,8 @@ impl Edge {
                     segment_idx + 1,
                 )
                 .expect("already checked the index");
-                let from_offset = (start_position - end_position) / 3.0;
-                let to_offset = -from_offset;
+                let to_offset = (start_position - end_position) / 3.0;
+                let from_offset = -to_offset;
                 *segment = EdgeSegment::Bezier(BezierEdgeSegment {
                     from_offset,
                     to_offset,
@@ -431,10 +429,10 @@ impl Edge {
         } else if control_point_idx - 1 > self.control_points.len() {
             return Err(ManipulateEdgeError::InvalidControlPoint { control_point_idx });
         }
-        // self.make_bezier(initial_node, terminal_node, control_point_idx - 1)
-        //     .expect("already checked index");
-        // self.make_bezier(initial_node, terminal_node, control_point_idx)
-        //     .expect("already checked index");
+        self.make_bezier(initial_node, terminal_node, control_point_idx - 1)
+            .expect("already checked index");
+        self.make_bezier(initial_node, terminal_node, control_point_idx)
+            .expect("already checked index");
 
         self.symmetries.remove(control_point_idx);
         Ok(())

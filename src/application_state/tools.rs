@@ -66,13 +66,13 @@ impl Tool for MoveTool {
             state.queue_draw();
         }
     }
-    fn on_release(self: Rc<Self>, state: &mut ApplicationState, press: &EventButton) {
+    fn on_release(self: Rc<Self>, _state: &mut ApplicationState, press: &EventButton) {
         if press.button() == 1 {
             let mut currently_moving_item = self.currently_moving_item.borrow_mut();
             *currently_moving_item = None;
         }
     }
-    fn cleanup(self: Rc<Self>, state: &mut ApplicationState) {
+    fn cleanup(self: Rc<Self>, _state: &mut ApplicationState) {
         let mut currently_moving_item = self.currently_moving_item.borrow_mut();
         *currently_moving_item = None;
     }
@@ -260,10 +260,10 @@ impl Tool for ModifyTool {
             remove_item.set_label("Remove");
             remove_item.connect_activate({
                 let state = Weak::clone(&state.this);
-                move |remove_item| {
+                move |_remove_item| {
                     if let Some(state) = state.upgrade() {
                         let mut state = state.borrow_mut();
-                        closest_item.remove_item(&mut state);
+                        closest_item.remove_item(&mut state).unwrap();
                         state.queue_draw();
                     }
                 }
@@ -275,9 +275,10 @@ impl Tool for ModifyTool {
                 change_label_item.set_label("Change label");
                 change_label_item.connect_activate({
                     let state = Weak::clone(&state.this);
-                    move |change_label_item| {
+                    move |_change_label_item| {
                         if let Some(state) = state.upgrade() {
                             let mut state = state.borrow_mut();
+                            todo!("change label");
                             // closest_item.replace_label(&mut state, new_label);
                             state.queue_draw();
                         }
@@ -285,15 +286,19 @@ impl Tool for ModifyTool {
                 });
             }
 
-            if matches!(closest_item, ManipulableItem::EdgeMiddleControlPoint { .. }) {
+            eprintln!("TODO: don't show \"make (a)symmetric on initial/terminal handles\"");
+            if matches!(
+                closest_item,
+                ManipulableItem::EdgeMiddleControlPoint { .. } | ManipulableItem::EdgeHandle { .. }
+            ) {
                 let make_asymmetric_item = MenuItem::new();
                 make_asymmetric_item.set_label("Make asymmetric");
                 make_asymmetric_item.connect_activate({
                     let state = Weak::clone(&state.this);
-                    move |make_asymmetric_item| {
+                    move |_make_asymmetric_item| {
                         if let Some(state) = state.upgrade() {
                             let mut state = state.borrow_mut();
-                            closest_item.make_asymmetric(&mut state);
+                            closest_item.make_asymmetric(&mut state).unwrap();
                             state.queue_draw();
                         }
                     }
@@ -304,10 +309,10 @@ impl Tool for ModifyTool {
                 make_symmetric_item.set_label("Make symmetric");
                 make_symmetric_item.connect_activate({
                     let state = Weak::clone(&state.this);
-                    move |make_symmetric_item| {
+                    move |_make_symmetric_item| {
                         if let Some(state) = state.upgrade() {
                             let mut state = state.borrow_mut();
-                            closest_item.make_symmetric(&mut state);
+                            closest_item.make_symmetric(&mut state).unwrap();
                             state.queue_draw();
                         }
                     }
@@ -317,9 +322,8 @@ impl Tool for ModifyTool {
 
             menu.show_all();
             menu.popup_at_pointer(Some(press));
-            dbg!("AAA");
         } else {
-            // TODO: Handle right-clicking on empty canvas
+            eprintln!("TODO: Handle right-clicking on empty canvas");
         }
     }
 
