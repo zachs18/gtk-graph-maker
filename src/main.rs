@@ -48,19 +48,52 @@ fn build_ui(application: &gtk::Application) {
     );
     {
         let mut state = state.borrow_mut();
-        let n1 = state.add_node(Node {label: "Start".into(), position: (100.0, 100.0).into()});
-        let n2 = state.add_node(Node {label: "End".into(), position: (400.0, 400.0).into()});
-        state.add_edge(n1, n2, Edge {
+        let n1 = state.add_node(Node {
+            label: "Start".into(),
+            position: (100.0, 100.0).into(),
+        });
+        let n2 = state.add_node(Node {
+            label: "End".into(),
+            position: (400.0, 400.0).into(),
+        });
+        #[cfg(any())]
+        let edge = Edge {
             label: "Test".into(),
             kind: EdgeKind::Bezier(BezierEdge {
                 from_offset: (0.0, 300.0).into(),
                 to_offset: (0.0, -300.0).into(),
                 mid_handles: vec![
                     Handle::Symmetric((-50.0, -150.0).into(), (250.0, 250.0).into()),
-                    Handle::Asymmetric((-50.0, -150.0).into(), (200.0, 200.0).into(), (40.0, 40.0).into()),
+                    Handle::Asymmetric(
+                        (-50.0, -150.0).into(),
+                        (200.0, 200.0).into(),
+                        (40.0, 40.0).into(),
+                    ),
                 ],
             }),
-        });
+        };
+        let edge = Edge {
+            label: "Test".into(),
+            start_offset: (0.0, 0.0).into(),
+            end_offset: (0.0, 0.0).into(),
+            control_points: vec![(250.0, 250.0).into(), (200.0, 200.0).into()],
+            segments: vec![
+                EdgeSegment::Bezier(BezierEdgeSegment {
+                    from_offset: (0.0, 300.0).into(),
+                    to_offset: (-50.0, -150.0).into(),
+                }),
+                EdgeSegment::Bezier(BezierEdgeSegment {
+                    from_offset: (50.0, 150.0).into(),
+                    to_offset: (-50.0, -150.0).into(),
+                }),
+                EdgeSegment::Bezier(BezierEdgeSegment {
+                    from_offset: (40.0, 40.0).into(),
+                    to_offset: (0.0, -300.0).into(),
+                }),
+            ],
+            symmetries: Default::default(),
+        };
+        state.add_edge(n1, n2, edge);
     }
 
     window.show_all();

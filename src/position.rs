@@ -17,19 +17,27 @@ impl Offset {
 }
 
 impl From<(f64, f64)> for Position {
-    fn from((x, y): (f64, f64)) -> Self { Self { x, y } }
+    fn from((x, y): (f64, f64)) -> Self {
+        Self { x, y }
+    }
 }
 
 impl From<Position> for (f64, f64) {
-    fn from(Position { x, y }: Position) -> Self { (x, y) }
+    fn from(Position { x, y }: Position) -> Self {
+        (x, y)
+    }
 }
 
 impl From<(f64, f64)> for Offset {
-    fn from((x, y): (f64, f64)) -> Self { Self { x, y } }
+    fn from((x, y): (f64, f64)) -> Self {
+        Self { x, y }
+    }
 }
 
 impl From<Offset> for (f64, f64) {
-    fn from(Offset { x, y }: Offset) -> Self { (x, y) }
+    fn from(Offset { x, y }: Offset) -> Self {
+        (x, y)
+    }
 }
 
 macro_rules! impl_op {
@@ -87,7 +95,7 @@ macro_rules! impl_op {
     };
 }
 
-use std::ops::{Add, Sub, Neg, Mul, Div};
+use std::ops::{Add, Div, Mul, Neg, Sub};
 
 impl_op!(Add, add, Position + Offset => Position);
 impl_op!(Add, add, Offset + Position => Position);
@@ -101,56 +109,78 @@ impl_op!(Sub, sub, Position - Position => Offset);
 impl Neg for Offset {
     type Output = Offset;
     fn neg(self) -> Self {
-        Offset { x: -self.x, y: -self.y, }
+        Offset {
+            x: -self.x,
+            y: -self.y,
+        }
     }
 }
 impl Neg for &Offset {
     type Output = Offset;
     fn neg(self) -> Offset {
-        Offset { x: -self.x, y: -self.y, }
+        Offset {
+            x: -self.x,
+            y: -self.y,
+        }
     }
 }
 
 impl Mul<f64> for Offset {
     type Output = Offset;
     fn mul(self, rhs: f64) -> Self::Output {
-        Offset { x: self.x * rhs, y: self.y * rhs}
+        Offset {
+            x: self.x * rhs,
+            y: self.y * rhs,
+        }
     }
 }
 impl Mul<f64> for &Offset {
     type Output = Offset;
     fn mul(self, rhs: f64) -> Self::Output {
-        Offset { x: self.x * rhs, y: self.y * rhs}
+        Offset {
+            x: self.x * rhs,
+            y: self.y * rhs,
+        }
     }
 }
-
 
 impl Mul<Offset> for f64 {
     type Output = Offset;
     fn mul(self, rhs: Offset) -> Self::Output {
-        Offset { x: self * rhs.x, y: self * rhs.y }
+        Offset {
+            x: self * rhs.x,
+            y: self * rhs.y,
+        }
     }
 }
 impl Mul<&Offset> for f64 {
     type Output = Offset;
     fn mul(self, rhs: &Offset) -> Self::Output {
-        Offset { x: self * rhs.x, y: self * rhs.y }
+        Offset {
+            x: self * rhs.x,
+            y: self * rhs.y,
+        }
     }
 }
 
 impl Div<f64> for Offset {
     type Output = Offset;
     fn div(self, rhs: f64) -> Self::Output {
-        Offset { x: self.x / rhs, y: self.y / rhs}
+        Offset {
+            x: self.x / rhs,
+            y: self.y / rhs,
+        }
     }
 }
 impl Div<f64> for &Offset {
     type Output = Offset;
     fn div(self, rhs: f64) -> Self::Output {
-        Offset { x: self.x / rhs, y: self.y / rhs}
+        Offset {
+            x: self.x / rhs,
+            y: self.y / rhs,
+        }
     }
 }
-
 
 macro_rules! make_cairo_context_ext_trait {
     (
@@ -188,7 +218,7 @@ macro_rules! make_cairo_context_ext_trait {
 
 use gtk::cairo::Context;
 
-make_cairo_context_ext_trait!{
+make_cairo_context_ext_trait! {
     CairoContextExt for Context;
     (1) move_to_pos() => move_to;
     (1) line_to_pos() => line_to;
