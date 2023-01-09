@@ -1,12 +1,13 @@
 use crate::position::*;
-use gtk::prelude::ToggleButtonExt;
-use gtk::RadioButton;
+use gtk::prelude::{IsA, ToggleButtonExt};
+use gtk::traits::{ContainerExt, DialogExt, EntryExt};
 use gtk::{
     cairo::Context,
     gdk::{EventButton, EventMask, EventMotion, Rectangle as GdkRectangle},
     prelude::{WidgetExt, WidgetExtManual},
     DrawingArea, Inhibit,
 };
+use gtk::{ApplicationWindow, RadioButton, Widget};
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -17,45 +18,89 @@ pub use edge::*;
 
 #[derive(Debug)]
 pub struct Node {
-    pub label: Cow<'static, str>,
+    pub label: Option<Cow<'static, str>>,
     pub position: Position,
 }
 
 #[derive(Debug, Clone, Copy)]
 enum ManipulableItem {
-    /// Moving a node
+    /// Manipulating a node
     Node { idx: usize },
-    /// Moving the position of a control_point of an edge
+    /// Manipulating a control_point of an edge
     EdgeMiddleControlPoint {
         from_node: usize,
         to_node: usize,
         control_point_idx: usize,
     },
-    /// Moving the handle of a control_point of a Bezier edge (out_handle means the second handle for asymmetric, or negative first handle for symmetric)
+    /// Manipulating the handle of a control_point of a Bezier edge (out_handle means the second handle for asymmetric, or negative first handle for symmetric)
     EdgeHandle {
         from_node: usize,
         to_node: usize,
         segment_idx: usize,
         out_handle: bool,
     },
-    // /// Moving the handle of an endpoint of a Bezier edge
-    // EdgeHandle {
-    //     from_node: usize,
-    //     to_node: usize,
-    //     from_handle: bool,
-    // },
-    /// Moving or relabeling a node label
+    /// Right-clicking (not moving) the body of a segment of an edge.
+    EdgeBody {
+        from_node: usize,
+        to_node: usize,
+        segment_idx: usize,
+    },
+    /// Manipulating a node label
     #[allow(unused)]
     NodeLabel { idx: usize },
-    /// Moving or relabeling an edge label
+    /// Manipulating an edge label
     #[allow(unused)]
     EdgeLabel { from_node: usize, to_node: usize },
 }
 
-// TODO: Maybe make ManipulableItem have a method .actions() that lists the actions that can be performed?
 pub struct Action {
-    description: String,
-    action: Box<dyn Fn(&mut ApplicationState)>,
+    description: Cow<'static, str>,
+    action: Box<dyn Fn(&RefCell<ApplicationState>) -> Result<(), ManipulateError>>,
+}
+
+impl Action {
+    pub fn modal_dialog_action<W: IsA<Widget> + 'static>(
+        description: Cow<'static, str>,
+        dialog_name: impl AsRef<str> + 'static,
+        dialog_widget: &W,
+        on_ok: impl Fn(&W, &RefCell<ApplicationState>) -> Result<(), ManipulateError> + 'static,
+        on_cancel: impl Fn(&W, &RefCell<ApplicationState>) -> Result<(), ManipulateError> + 'static,
+    ) -> Self {
+        let dialog_widget: W = dialog_widget.clone();
+        Action {
+            description,
+            action: Box::new(move |state| {
+                let label_dialog = gtk::Dialog::with_buttons(
+                    Some(dialog_name.as_ref()),
+                    Some(&state.borrow().window),
+                    gtk::DialogFlags::MODAL,
+                    &[
+                        ("Ok", gtk::ResponseType::Ok),
+                        ("Cancel", gtk::ResponseType::Cancel),
+                    ],
+                );
+                label_dialog.content_area().add(&dialog_widget);
+                label_dialog.show_all();
+                // Don't have a borrow of `state` while the dialog is running,
+                // since it runs a main loop which may access state
+                let response = label_dialog.run();
+                label_dialog.hide();
+                match response {
+                    gtk::ResponseType::Accept
+                    | gtk::ResponseType::Ok
+                    | gtk::ResponseType::Yes
+                    | gtk::ResponseType::Apply => {
+                        on_ok(&dialog_widget, state)?;
+                    }
+                    _ => {
+                        on_cancel(&dialog_widget, state)?;
+                    }
+                }
+                state.borrow_mut().queue_draw();
+                Ok(())
+            }),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -72,9 +117,9 @@ pub enum ManipulateError {
         to_node: usize,
         error: ManipulateEdgeError,
     },
-    #[allow(unused)]
-    ItemIsNotLabel,
+    ItemHasNoLabel,
     ItemIsNotEdgeHandle,
+    ItemIsNotMovable,
 }
 
 impl ManipulateError {
@@ -91,6 +136,67 @@ impl ManipulateError {
 }
 
 impl ManipulableItem {
+    pub fn actions(&self, state: &mut ApplicationState) -> (String, Vec<Action>) {
+        let this = *self;
+        let description = format!("{self:?}");
+        let mut actions = vec![];
+        actions.push(Action {
+            description: "Remove".into(),
+            action: Box::new(move |state| this.remove_item(&mut state.borrow_mut())),
+        });
+        // if self.is_label() || self.has_label() {
+        //     actions.push(Action {
+        //         description: "Remove label".into(),
+        //         action: Box::new(move |state| this.move_item(state)),
+        //     });
+        // }
+        if self.is_label() || self.can_have_label() {
+            match self.get_label(state).expect("self can have label") {
+                None => {
+                    let add_label_entry = gtk::Entry::new();
+                    actions.push(Action::modal_dialog_action(
+                        "Add label".into(),
+                        format!("Adding label to {this:?}"),
+                        &add_label_entry,
+                        move |add_label_entry, state| {
+                            this.replace_label(
+                                &mut state.borrow_mut(),
+                                Some(add_label_entry.buffer().text().into()),
+                            )?;
+                            Ok(())
+                        },
+                        |_, _| Ok(()),
+                    ));
+                }
+                Some(label) => {
+                    let change_label_entry =
+                        gtk::Entry::with_buffer(&gtk::EntryBuffer::new(Some(label)));
+                    actions.push(Action::modal_dialog_action(
+                        "Change label".into(),
+                        format!("Changing label of {this:?}"),
+                        &change_label_entry,
+                        move |label_entry, state| {
+                            this.replace_label(
+                                &mut state.borrow_mut(),
+                                Some(label_entry.buffer().text().into()),
+                            )?;
+                            Ok(())
+                        },
+                        |_, _| Ok(()),
+                    ));
+                    actions.push(Action {
+                        description: "Remove label".into(),
+                        action: Box::new(move |state| {
+                            this.replace_label(&mut state.borrow_mut(), None)?;
+                            Ok(())
+                        }),
+                    })
+                }
+            }
+        }
+        (description, actions)
+    }
+
     pub fn is_movable(&self) -> bool {
         use ManipulableItem::*;
         match self {
@@ -99,6 +205,7 @@ impl ManipulableItem {
             EdgeHandle { .. } => true,
             NodeLabel { .. } => true,
             EdgeLabel { .. } => true,
+            EdgeBody { .. } => false,
         }
     }
 
@@ -109,12 +216,14 @@ impl ManipulableItem {
     ) -> Result<(), ManipulateError> {
         use ManipulateError::*;
         match *self {
+            ManipulableItem::EdgeBody { .. } => Err(ManipulateError::ItemIsNotMovable),
             ManipulableItem::Node { idx } => {
                 state
                     .nodes
                     .get_mut(&idx)
                     .ok_or(InvalidNode { idx })?
                     .position = position;
+                Ok(())
             }
             ManipulableItem::EdgeHandle {
                 from_node,
@@ -158,6 +267,7 @@ impl ManipulableItem {
                         }
                     })? = position - *handle.position();
                 }
+                Ok(())
             }
             ManipulableItem::EdgeMiddleControlPoint {
                 from_node,
@@ -169,15 +279,15 @@ impl ManipulableItem {
                     .get_mut(&(from_node, to_node))
                     .ok_or(InvalidEdge { from_node, to_node })?;
                 edge.control_points[idx - 1] = position;
+                Ok(())
             }
-            ManipulableItem::NodeLabel { idx } => {
+            ManipulableItem::NodeLabel { .. } => {
                 todo!("implement node label positioning with offsets")
             }
-            ManipulableItem::EdgeLabel { from_node, to_node } => {
+            ManipulableItem::EdgeLabel { .. } => {
                 todo!("implement edge label positioning with offsets")
             }
-        };
-        Ok(())
+        }
     }
 
     pub fn is_label(&self) -> bool {
@@ -192,43 +302,61 @@ impl ManipulableItem {
     pub fn replace_label(
         &self,
         state: &mut ApplicationState,
-        new_label: Cow<'static, str>,
-    ) -> Result<Cow<'static, str>, ManipulateError> {
+        new_label: Option<Cow<'static, str>>,
+    ) -> Result<Option<Cow<'static, str>>, ManipulateError> {
         use ManipulableItem::*;
         use ManipulateError::*;
         match *self {
-            // TODO: decide if Node should be able to be interpreted as NodeLabel when unambiguous
             Node { idx } | NodeLabel { idx } => {
                 let node = state.nodes.get_mut(&idx).ok_or(InvalidNode { idx })?;
                 Ok(std::mem::replace(&mut node.label, new_label))
             }
-            EdgeLabel { from_node, to_node } => {
+            EdgeMiddleControlPoint {
+                from_node, to_node, ..
+            }
+            | EdgeHandle {
+                from_node, to_node, ..
+            }
+            | EdgeBody {
+                from_node, to_node, ..
+            }
+            | EdgeLabel { from_node, to_node } => {
                 let edge = state
                     .edges
                     .get_mut(&(from_node, to_node))
                     .ok_or(InvalidEdge { from_node, to_node })?;
                 Ok(std::mem::replace(&mut edge.label, new_label))
             }
-            _ => Err(ItemIsNotLabel),
         }
     }
 
-    pub fn get_label<'a>(&self, state: &'a ApplicationState) -> Result<&'a str, ManipulateError> {
+    pub fn get_label<'a>(
+        &self,
+        state: &'a ApplicationState,
+    ) -> Result<Option<&'a str>, ManipulateError> {
         use ManipulableItem::*;
         use ManipulateError::*;
         match *self {
-            NodeLabel { idx } => {
+            Node { idx } | NodeLabel { idx } => {
                 let node = state.nodes.get(&idx).ok_or(InvalidNode { idx })?;
-                Ok(&node.label)
+                Ok(node.label.as_deref())
             }
-            EdgeLabel { from_node, to_node } => {
+            EdgeMiddleControlPoint {
+                from_node, to_node, ..
+            }
+            | EdgeHandle {
+                from_node, to_node, ..
+            }
+            | EdgeBody {
+                from_node, to_node, ..
+            }
+            | EdgeLabel { from_node, to_node } => {
                 let edge = state
                     .edges
                     .get(&(from_node, to_node))
                     .ok_or(InvalidEdge { from_node, to_node })?;
-                Ok(&edge.label)
+                Ok(edge.label.as_deref())
             }
-            _ => Err(ItemIsNotLabel),
         }
     }
 
@@ -339,12 +467,33 @@ impl ManipulableItem {
                 state.remove_edge(from_node, to_node);
                 Ok(())
             }
+            ManipulableItem::EdgeBody {
+                from_node,
+                to_node,
+                segment_idx,
+            } => {
+                eprintln!("TODO: remove the whole edge, or just this segment? Probably remove whole edge if last segment, else just remove the segment");
+                state.remove_edge(from_node, to_node);
+                Ok(())
+            }
             ManipulableItem::NodeLabel { .. } => {
                 todo!("implement node label positioning with offsets")
             }
             ManipulableItem::EdgeLabel { .. } => {
                 todo!("implement edge label positioning with offsets")
             }
+        }
+    }
+
+    pub(crate) fn can_have_label(&self) -> bool {
+        use ManipulableItem::*;
+        match self {
+            Node { .. } => true,
+            EdgeMiddleControlPoint { .. } => true,
+            EdgeHandle { .. } => true,
+            EdgeBody { .. } => true,
+            NodeLabel { .. } => false,
+            EdgeLabel { .. } => false,
         }
     }
 }
@@ -360,13 +509,15 @@ pub struct ApplicationState {
     edges: HashMap<(usize, usize), Edge>,
     allocated_size: Option<(u32, u32)>,
     this: Weak<RefCell<Self>>,
-    drawing_area: Rc<DrawingArea>,
+    drawing_area: DrawingArea,
+    window: ApplicationWindow,
     tool: Rc<dyn Tool>,
 }
 
 impl ApplicationState {
     pub fn new(
-        drawing_area: &Rc<DrawingArea>,
+        window: ApplicationWindow,
+        drawing_area: DrawingArea,
         move_tool_button: &RadioButton,
         create_nodes_tool_button: &RadioButton,
         create_edges_tool_button: &RadioButton,
@@ -378,7 +529,8 @@ impl ApplicationState {
             edges: HashMap::new(),
             allocated_size: None,
             this: Weak::new(),
-            drawing_area: Rc::clone(drawing_area),
+            drawing_area: drawing_area.clone(),
+            window,
             tool: Rc::new(MoveTool::default()),
         };
         let state = Rc::new(RefCell::new(state));
@@ -579,6 +731,21 @@ impl ApplicationState {
         }
     }
 
+    fn draw_labels(&self, _area: &DrawingArea, ctx: &Context) {
+        // let draw_label = |position, label| ctx.show_text(text);
+
+        for (_idx, node) in self.nodes.iter() {
+            if let Some(label) = node.label.as_deref() {
+                let position = node.position;
+                ctx.move_to_pos(position);
+                // TODO: use ctx.show_text_glyphs, which also can allows centering text.
+                ctx.show_text(label).expect("handle error?");
+            }
+        }
+
+        // TODO: edge labels
+    }
+
     fn draw(&self, area: &DrawingArea, ctx: &Context) {
         // let size = self.allocated_size.unwrap();
 
@@ -591,6 +758,9 @@ impl ApplicationState {
 
         // Draw nodes
         self.draw_nodes(area, ctx);
+
+        // Draw labels
+        self.draw_labels(area, ctx);
     }
 
     /// Returns the item and the squared distance from the item to the position

@@ -1,6 +1,5 @@
 use gtk::{prelude::*, RadioButton};
 use gtk::{ApplicationWindow, Grid};
-use std::rc::Rc;
 
 mod position;
 
@@ -20,10 +19,10 @@ fn build_ui(application: &gtk::Application) {
     grid.set_vexpand(true);
     window.add(&grid);
 
-    let drawing_area = Rc::new(gtk::DrawingArea::new());
+    let drawing_area = gtk::DrawingArea::new();
     drawing_area.set_hexpand(true);
     drawing_area.set_vexpand(true);
-    grid.attach(&*drawing_area, 0, 0, 4, 1);
+    grid.attach(&drawing_area, 0, 0, 4, 1);
 
     let move_tool_button = RadioButton::new();
     move_tool_button.set_label("Move Tool");
@@ -40,7 +39,8 @@ fn build_ui(application: &gtk::Application) {
     grid.attach(&modify_tool_button, 3, 1, 1, 1);
 
     let state = ApplicationState::new(
-        &drawing_area,
+        window.clone(),
+        drawing_area.clone(),
         &move_tool_button,
         &create_nodes_tool_button,
         &create_edges_tool_button,
@@ -49,11 +49,11 @@ fn build_ui(application: &gtk::Application) {
     {
         let mut state = state.borrow_mut();
         let n1 = state.add_node(Node {
-            label: "Start".into(),
+            label: Some("Start".into()),
             position: (100.0, 100.0).into(),
         });
         let n2 = state.add_node(Node {
-            label: "End".into(),
+            label: Some("End".into()),
             position: (400.0, 400.0).into(),
         });
         #[cfg(any())]
@@ -73,7 +73,7 @@ fn build_ui(application: &gtk::Application) {
             }),
         };
         let edge = Edge {
-            label: "Test".into(),
+            label: Some("Test".into()),
             start_offset: (0.0, 0.0).into(),
             end_offset: (0.0, 0.0).into(),
             control_points: vec![(250.0, 250.0).into(), (200.0, 200.0).into()],

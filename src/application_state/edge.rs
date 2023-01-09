@@ -212,7 +212,7 @@ impl EdgeSegment {
 
 #[derive(Clone, Debug)]
 pub struct Edge {
-    pub label: Cow<'static, str>,
+    pub label: Option<Cow<'static, str>>,
     // Offset from initial node
     pub start_offset: Offset,
     // Offset from terminal node
@@ -229,10 +229,10 @@ pub struct Edge {
 impl Default for Edge {
     fn default() -> Self {
         Self {
-            label: Cow::Borrowed(""),
+            label: None,
             start_offset: Default::default(),
             end_offset: Default::default(),
-            control_points: Default::default(),
+            control_points: vec![],
             segments: vec![EdgeSegment::Linear],
             symmetries: Default::default(),
         }

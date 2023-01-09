@@ -1,5 +1,4 @@
 use std::{
-    borrow::Cow,
     cell::RefCell,
     rc::{Rc, Weak},
 };
@@ -68,13 +67,11 @@ impl Tool for MoveTool {
     }
     fn on_release(self: Rc<Self>, _state: &mut ApplicationState, press: &EventButton) {
         if press.button() == 1 {
-            let mut currently_moving_item = self.currently_moving_item.borrow_mut();
-            *currently_moving_item = None;
+            self.currently_moving_item.replace(None);
         }
     }
     fn cleanup(self: Rc<Self>, _state: &mut ApplicationState) {
-        let mut currently_moving_item = self.currently_moving_item.borrow_mut();
-        *currently_moving_item = None;
+        self.currently_moving_item.replace(None);
     }
 }
 
@@ -96,7 +93,7 @@ impl Tool for CreateNodeTool {
         match press.button() {
             1 => {
                 let idx = state.add_node(Node {
-                    label: Cow::Borrowed(""),
+                    label: None,
                     position: press_position,
                 });
                 *currrent_node = Some(ManipulableItem::Node { idx });
@@ -116,14 +113,12 @@ impl Tool for CreateNodeTool {
         }
     }
     fn on_release(self: Rc<Self>, _state: &mut ApplicationState, press: &EventButton) {
-        let mut currrent_node = self.currrent_node.borrow_mut();
         if press.button() == 1 {
-            *currrent_node = None;
+            self.currrent_node.replace(None);
         }
     }
     fn cleanup(self: Rc<Self>, _state: &mut ApplicationState) {
-        let mut currrent_node = self.currrent_node.borrow_mut();
-        *currrent_node = None;
+        self.currrent_node.replace(None);
     }
 }
 
@@ -159,7 +154,7 @@ impl Tool for CreateEdgeTool {
         if let Some((ManipulableItem::Node { idx }, _)) = state.find_closest_item(press_position) {
             let from_node = idx;
             let fake_to_node = state.add_node(Node {
-                label: "<fake node>".into(),
+                label: None,
                 position: press_position,
             });
             *inner = Some(CreateEdgeToolInner {
@@ -250,41 +245,92 @@ impl Tool for ModifyTool {
         };
         dbg!(closest_item);
         if let Some(closest_item) = closest_item {
+            let (description, actions) = closest_item.actions(state);
+
             let label_item = MenuItem::new();
-            label_item.set_label(&format!("{:?}", closest_item)); // TODO: description, e.g. including label?
+            label_item.set_label(&description); // TODO: description, e.g. including label?
             label_item.show();
             label_item.set_sensitive(false);
             attach(&label_item);
 
-            let remove_item = MenuItem::new();
-            remove_item.set_label("Remove");
-            remove_item.connect_activate({
-                let state = Weak::clone(&state.this);
-                move |_remove_item| {
-                    if let Some(state) = state.upgrade() {
-                        let mut state = state.borrow_mut();
-                        closest_item.remove_item(&mut state).unwrap();
-                        state.queue_draw();
-                    }
-                }
-            });
-            attach(&remove_item);
-
-            if closest_item.is_label() {
-                let change_label_item = MenuItem::new();
-                change_label_item.set_label("Change label");
-                change_label_item.connect_activate({
+            for action in actions {
+                let action_item = MenuItem::new();
+                action_item.set_label(&action.description);
+                action_item.connect_activate({
                     let state = Weak::clone(&state.this);
-                    move |_change_label_item| {
+                    move |_action_item| {
                         if let Some(state) = state.upgrade() {
-                            let mut state = state.borrow_mut();
-                            todo!("change label");
-                            // closest_item.replace_label(&mut state, new_label);
-                            state.queue_draw();
+                            (action.action)(&state).unwrap();
+                            state.borrow_mut().queue_draw();
                         }
                     }
                 });
+                attach(&action_item);
             }
+
+            // let remove_item = MenuItem::new();
+            // remove_item.set_label("Remove");
+            // remove_item.connect_activate({
+            //     let state = Weak::clone(&state.this);
+            //     move |_remove_item| {
+            //         if let Some(state) = state.upgrade() {
+            //             let mut state = state.borrow_mut();
+            //             closest_item.remove_item(&mut state).unwrap();
+            //             state.queue_draw();
+            //         }
+            //     }
+            // });
+            // attach(&remove_item);
+
+            // if closest_item.is_label() || closest_item.can_have_label() {
+            //     let change_label_item = MenuItem::new();
+            //     change_label_item.set_label("Change label");
+            //     change_label_item.connect_activate({
+            //         let state = Weak::clone(&state.this);
+            //         move |_change_label_item| {
+            //             if let Some(state) = state.upgrade() {
+            //                 let label_entry = gtk::Entry::with_buffer(&gtk::EntryBuffer::new(
+            //                     closest_item.get_label(&state.borrow()).unwrap(),
+            //                 ));
+            //                 let label_dialog = gtk::Dialog::with_buttons(
+            //                     Some(&format!("Changing label of {closest_item:?}")),
+            //                     Some(&state.borrow().window),
+            //                     gtk::DialogFlags::MODAL,
+            //                     &[
+            //                         ("Ok", gtk::ResponseType::Ok),
+            //                         ("Cancel", gtk::ResponseType::Cancel),
+            //                     ],
+            //                 );
+            //                 label_dialog.content_area().add(&label_entry);
+            //                 label_dialog.show_all();
+            //                 // Don't have a borrow of `state` while the dialog is running,
+            //                 // since it runs a main loop which may access state
+            //                 let response = label_dialog.run();
+            //                 label_dialog.hide();
+            //                 let mut state = state.borrow_mut();
+            //                 match response {
+            //                     gtk::ResponseType::Accept
+            //                     | gtk::ResponseType::Ok
+            //                     | gtk::ResponseType::Yes
+            //                     | gtk::ResponseType::Apply => {
+            //                         closest_item
+            //                             .replace_label(
+            //                                 &mut state,
+            //                                 label_entry.buffer().text().into(),
+            //                             )
+            //                             .unwrap();
+            //                     }
+            //                     _ => {
+            //                         // Don't change the label
+            //                     }
+            //                 }
+            //                 // closest_item.replace_label(&mut state, new_label);
+            //                 state.queue_draw();
+            //             }
+            //         }
+            //     });
+            //     attach(&change_label_item);
+            // }
 
             eprintln!("TODO: don't show \"make (a)symmetric on initial/terminal handles\"");
             if matches!(
